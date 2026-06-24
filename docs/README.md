@@ -10,6 +10,7 @@ Puddle Trader CLI 설계·기획·구현 문서 모음.
 ## 설계
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 계층 구조, 데이터 흐름, 모듈 매핑
 - [STRATEGY.md](STRATEGY.md) — Puddle Rebound 전략 명세 (C1~C10, 청산, 라벨)
+- [LEARNING_SYSTEM.md](LEARNING_SYSTEM.md) — 자기개선 학습 루프 (축적→학습→확률개선→승격)
 - [DATA_MODEL.md](DATA_MODEL.md) — SQLite 스키마와 사용 규칙
 
 ## API

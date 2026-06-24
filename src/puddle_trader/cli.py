@@ -107,5 +107,67 @@ def watch(
     typer.echo(f"[WATCH] mode={mode} interval={interval} (구현 예정)")
 
 
+# --- 학습 루프 명령 (LEARNING_SYSTEM.md §9) — Phase 3~4 에서 구현 ---
+model_app = typer.Typer(help="모델 레지스트리 (list/rollback)")
+app.add_typer(model_app, name="model")
+
+_TODO = "(구현 예정 — IMPLEMENTATION_PLAN Phase 4)"
+
+
+@app.command()
+def label(date: str = typer.Option(..., "--date", help="YYYY-MM-DD")) -> None:
+    """청산 결과 라벨링 + training_examples 적재."""
+    typer.echo(f"[LABEL] {date} {_TODO}")
+
+
+@app.command()
+def dataset(action: str = typer.Argument("build")) -> None:
+    """학습 데이터셋 재구성(누수 검증 포함)."""
+    typer.echo(f"[DATASET] {action} {_TODO}")
+
+
+@app.command()
+def train(
+    target: str = typer.Option("hit_tp_before_sl", "--target"),
+    algo: str = typer.Option("logreg", "--algo"),
+) -> None:
+    """모델 후보 학습 + 확률 보정."""
+    typer.echo(f"[TRAIN] target={target} algo={algo} {_TODO}")
+
+
+@app.command()
+def evaluate(last: str = typer.Option("30d", "--last")) -> None:
+    """워크포워드 검증 지표 출력."""
+    typer.echo(f"[EVALUATE] last={last} {_TODO}")
+
+
+@app.command()
+def gate() -> None:
+    """현재 후보 모델의 승격 게이트 통과 여부 점검."""
+    typer.echo(f"[GATE] {_TODO}")
+
+
+@app.command()
+def promote(version: str = typer.Option(..., "--version")) -> None:
+    """게이트 통과 모델을 active 로 승격."""
+    typer.echo(f"[PROMOTE] {version} {_TODO}")
+
+
+@app.command()
+def drift() -> None:
+    """성능·feature 드리프트 점검 (발동 시 auto mode 비활성화 권고)."""
+    typer.echo(f"[DRIFT] {_TODO}")
+
+
+@model_app.command("list")
+def model_list() -> None:
+    typer.echo(f"[MODEL] list {_TODO}")
+
+
+@model_app.command("rollback")
+def model_rollback(to: str = typer.Option(..., "--to")) -> None:
+    typer.echo(f"[MODEL] rollback → {to} {_TODO}")
+
+
 if __name__ == "__main__":
     app()
