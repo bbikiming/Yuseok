@@ -1,0 +1,4 @@
+# 생성 산출물 (스펙으로부터 재생성 가능)
+toss_openapi_docs/
+__pycache__/
+*.pyc
