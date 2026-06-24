@@ -7,7 +7,9 @@
 > ⚠️ 이 프로그램은 "AI가 알아서 매수/매도하는 자동 수익 봇"이 아니다. 기본 모드는 **무조건
 > paper(가상매매)** 이며, 실주문은 충분한 검증 이후 반자동(manual)부터 단계적으로 확장한다.
 
-전체 제품 정의는 [`docs/PRD.md`](docs/PRD.md), API 검증 결과는 [`docs/API_NOTES.md`](docs/API_NOTES.md) 참고.
+전체 문서는 [`docs/`](docs/README.md) 참고 — 제품 정의([PRD](docs/PRD.md)), 아키텍처([ARCHITECTURE](docs/ARCHITECTURE.md)),
+전략 명세([STRATEGY](docs/STRATEGY.md)), API 검증/참조([API_NOTES](docs/API_NOTES.md) · [API_REFERENCE](docs/API_REFERENCE.md)),
+구현 계획([IMPLEMENTATION_PLAN](docs/IMPLEMENTATION_PLAN.md)), 설정 가이드([SETUP](docs/SETUP.md)).
 
 ## 설치
 
