@@ -1,10 +1,10 @@
 from puddle_trader.candles import resample
 
 
-def _c(ts, o, h, l, c, v):
+def _c(ts, o, h, lo, c, v):
     return {
         "timestamp": ts, "openPrice": str(o), "highPrice": str(h),
-        "lowPrice": str(l), "closePrice": str(c), "volume": str(v), "currency": "KRW",
+        "lowPrice": str(lo), "closePrice": str(c), "volume": str(v), "currency": "KRW",
     }
 
 
