@@ -1,0 +1,11 @@
+# 관심종목은 토스 앱에서 가져오지 않고 여기서 직접 관리한다.
+# market: KR(6자리 코드) / US(티커)
+symbols:
+  - market: KR
+    code: "000660"
+    name: "SK하이닉스"
+    enabled: true
+  - market: KR
+    code: "005930"
+    name: "삼성전자"
+    enabled: true

@@ -1,0 +1,31 @@
+strategy:
+  name: puddle_rebound
+  enabled: true
+
+scan:
+  interval_seconds: 10
+  # 주의: 토스 Open API 캔들은 1m, 1d 만 지원한다.
+  # 3분봉/5분봉은 1분봉을 직접 합성(resample)해서 사용한다. (candles.resample 참고)
+  base_candle_interval: "1m"
+  derived_intervals:
+    - "3m"
+    - "5m"
+
+puddle:
+  drop_window_minutes: 10
+  min_drop_rate: -0.012
+  max_drop_rate: -0.035
+  require_low_support: true
+  require_volume_recovery: true
+  require_orderbook_stable: true
+
+entry:
+  min_puddle_score: 70
+  min_ai_score: 0.58
+  allow_without_ai: true
+
+exit:
+  take_profit_1_rate: 0.005
+  take_profit_2_rate: 0.009
+  stop_loss_rate: -0.005
+  max_hold_minutes: 15

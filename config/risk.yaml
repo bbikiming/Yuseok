@@ -1,0 +1,25 @@
+mode:
+  default: paper          # 기본 모드는 무조건 paper (실주문 차단)
+  allow_manual_order: false
+  allow_auto_order: false
+
+capital:
+  max_order_amount_krw: 300000
+  max_daily_loss_krw: 100000
+  max_daily_entries: 5
+  max_symbol_entries_per_day: 2
+
+exit:
+  take_profit_1_rate: 0.005
+  take_profit_2_rate: 0.009
+  stop_loss_rate: -0.005
+  max_hold_minutes: 15
+
+cooldown:
+  after_loss_minutes: 30
+  after_trade_minutes: 10
+
+safety:
+  stop_on_api_error: true
+  stop_on_consecutive_losses: 3
+  require_manual_confirm_for_live_order: true

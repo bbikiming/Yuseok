@@ -1,4 +1,32 @@
-# 생성 산출물 (스펙으로부터 재생성 가능)
-toss_openapi_docs/
+# secrets — NEVER commit
+.env
+*.secret
+secrets/
+
+# data & artifacts
+data/
+logs/
+reports/
+models/
+exports/
+*.sqlite
+*.sqlite3
+*.db
+
+# python
 __pycache__/
-*.pyc
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/

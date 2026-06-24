@@ -1,0 +1,19 @@
+app:
+  timezone: Asia/Seoul
+  database_path: data/tradebot.sqlite
+  reports_path: reports
+  logs_path: logs
+
+api:
+  provider: tossinvest
+  base_url: https://openapi.tossinvest.com
+  token_url: /oauth2/token
+  timeout_seconds: 5
+  retry_count: 2
+  retry_backoff_seconds: 1
+  # 토큰은 client당 1개만 유효(재발급 시 이전 토큰 무효화)하므로 캐시 후 만료 임박 시에만 재발급.
+  token_refresh_margin_seconds: 300
+
+logging:
+  level: INFO
+  mask_secrets: true
