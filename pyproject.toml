@@ -24,6 +24,9 @@ tradebot = "puddle_trader.cli:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+puddle_trader = ["db/*.sql", "db/migrations/*.sql", "ui/static/*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

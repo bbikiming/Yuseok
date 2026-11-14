@@ -57,6 +57,12 @@ class FakeTossServer:
         self.now_fn = now_fn or (lambda: datetime.now(repo.KST))
         self.price_override: dict[str, float] = {}   # 테스트에서 현재가를 바꿀 때 사용
         self.no_trade_symbols: set[str] = set()      # 직전 1분에 체결이 없어 그 봉이 없는 종목
+        # 데모 시나리오용 훅: price_fn(symbol, now) → 현재가, signal_fn(symbol, now) → 신호 여부
+        self.price_fn = None
+        self.signal_fn = None
+        # anchor_fn(symbol) → 신호가 나는 분 경계(datetime) 또는 None. 주면 그 시각을 기준으로
+        # 봉 이력이 고정된다 (signal_fn 방식은 매분 이력이 통째로 바뀐다).
+        self.anchor_fn = None
         self.calls: dict[str, int] = {}
         self.throttled = 0
         self.token_calls = 0
@@ -190,10 +196,28 @@ class FakeTossServer:
         self._send(h, 200, {"result": result})
 
     # ---- synthetic market ----
+    def _is_signal(self, symbol: str) -> bool:
+        if self.signal_fn is not None:
+            return bool(self.signal_fn(symbol, self.now_fn()))
+        return symbol in self.signal_symbols
+
     def _last_price(self, symbol: str) -> float:
         if symbol in self.price_override:
             return self.price_override[symbol]
-        return float(PUDDLE_TAIL[-1][3]) if symbol in self.signal_symbols else BASE_PRICE
+        if self.price_fn is not None:
+            return float(self.price_fn(symbol, self.now_fn()))
+        return float(PUDDLE_TAIL[-1][3]) if self._is_signal(symbol) else BASE_PRICE
+
+    def _anchored_bar(self, symbol: str, anchor: datetime, ts: datetime) -> tuple:
+        """anchor 직전 봉이 신호 봉이 되도록 고정된 이력. anchor 이후는 그 시각의 가격으로 평평."""
+        back = round((anchor - timedelta(minutes=1) - ts).total_seconds() / 60)
+        if 0 <= back < len(PUDDLE_TAIL):
+            return PUDDLE_TAIL[len(PUDDLE_TAIL) - 1 - back]
+        if back >= len(PUDDLE_TAIL):
+            return (BASE_PRICE, BASE_PRICE, BASE_PRICE, BASE_PRICE, 100)
+        p = float(self.price_fn(symbol, ts + timedelta(seconds=59))) if self.price_fn else \
+            float(PUDDLE_TAIL[-1][3])
+        return (p, p, p, p, 100)
 
     def _candles(self, symbol: str, count: int) -> list[dict]:
         """현재 분 기준으로 완성봉 + 진행 중인 봉 1개.
@@ -206,13 +230,16 @@ class FakeTossServer:
         lagging = since_ms < self.candle_lag_ms
         new_bar_visible = not lagging and since_ms >= self.new_bar_delay_ms
         last_complete = boundary - timedelta(minutes=2 if lagging else 1)
-        tail = PUDDLE_TAIL if symbol in self.signal_symbols else []
+        anchor = self.anchor_fn(symbol) if self.anchor_fn is not None else None
+        tail = PUDDLE_TAIL if (anchor is None and self._is_signal(symbol)) else []
         out = []
         for k in range(count - 1):
             ts = last_complete - timedelta(minutes=k)
             if k == 0 and symbol in self.no_trade_symbols:
                 continue
-            if k < len(tail):
+            if anchor is not None:
+                o, hi, lo, c, v = self._anchored_bar(symbol, anchor, ts)
+            elif k < len(tail):
                 o, hi, lo, c, v = tail[len(tail) - 1 - k]
             else:
                 o = hi = lo = c = BASE_PRICE

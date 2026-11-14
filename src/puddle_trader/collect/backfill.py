@@ -85,3 +85,42 @@ def backfill_symbol(
     ).fetchone()
     res.oldest, res.newest = row[0], row[1]
     return res
+
+
+def backfill_many(
+    client,
+    conn: sqlite3.Connection,
+    targets: list[tuple[str, str, str | None]],
+    interval: str = "1m",
+    *,
+    since: datetime | None = None,
+    max_pages: int = 1000,
+    on_result=None,
+) -> list[BackfillResult | tuple[str, Exception]]:
+    """여러 종목을 차례로 백필한다. targets: (market, code, name).
+
+    종목 유형(주식/ETF)은 비용 모델을 가르므로 먼저 조회해 함께 저장한다.
+    종목별 실패는 (symbol_id, 예외)로 돌려주고 나머지를 계속한다. CLI 와 화면이 함께 쓴다.
+    """
+    from ..api.client import TossApiError
+    from ..api.endpoints import StockInfo
+
+    md = MarketData(client)
+    try:
+        infos = {i["symbol"]: i for i in StockInfo(client).stocks([c for _, c, _ in targets])}
+    except TossApiError:
+        infos = {}      # 유형 미상으로 진행 (주식으로 가정)
+    results: list[BackfillResult | tuple[str, Exception]] = []
+    for market, code, name in targets:
+        info = infos.get(code, {})
+        repo.ensure_symbol(conn, market, code, info.get("name") or name, info.get("securityType"))
+        conn.commit()
+        try:
+            item: BackfillResult | tuple[str, Exception] = backfill_symbol(
+                md, conn, market, code, interval, max_pages=max_pages, since=since)
+        except TossApiError as exc:
+            item = (repo.symbol_id(market, code), exc)
+        results.append(item)
+        if on_result:
+            on_result(item)
+    return results

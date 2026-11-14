@@ -27,7 +27,18 @@ cp .env.example .env
 # .env 를 열어 TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 입력
 ```
 
-## 사용
+## 화면으로 쓰기 (주식을 잘 몰라도)
+
+```bash
+tradebot ui --demo     # 키 없이 약 3분짜리 가상 시나리오로 화면 둘러보기
+tradebot ui            # 실제 사용: 브라우저에서 키 입력 → 과거 기록 받기 → 시험 → 연습 매매
+```
+
+브라우저(`http://127.0.0.1:8765`)에서 연습 매매 현황, 신호가 난 이유, 원 단위 손익, 관심종목,
+설정을 다룬다. 이 컴퓨터에서만 열리고, **실제 주문을 켜는 버튼은 없다**.
+화면 구성과 원칙은 [docs/UI.md](docs/UI.md).
+
+## 사용 (명령어)
 
 ```bash
 tradebot init                       # 디렉토리 + SQLite DB 생성
@@ -63,6 +74,9 @@ src/puddle_trader/
   api/         토스 API 클라이언트(토큰 캐싱·429 백오프) + 엔드포인트 래퍼
   candles.py   1분봉 → 3m/5m 합성 (API 가 1m/1d 만 주므로)
   db/          SQLite 스키마 + 연결
+  realtime/    실시간 스캐너 (가격 폴링 → 분 마감 탐지 → 가상 진입/청산)
+  backtest/    과거 1분봉 리플레이·지표·그리드
+  ui/          로컬 웹 화면 (서버 + 한 장짜리 페이지)
   cli.py       tradebot 명령
 docs/          PRD, API 검증 노트
 ```

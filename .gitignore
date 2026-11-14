@@ -1,5 +1,7 @@
 # secrets — NEVER commit
 .env
+# 화면에서 바꾼 개인 설정
+config/local.yaml
 *.secret
 secrets/
 

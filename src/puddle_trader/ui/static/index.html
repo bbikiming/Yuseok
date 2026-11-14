@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>웅덩이 트레이더</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{--ground:#F3F5F7;--surface:#fff;--line:#DDE3E9;--ink:#16202B;--sub:#4B5866;--teal:#0F766E;
+--teal-ink:#0B5A54;--teal-tint:#E3F2EF;--up:#CF3B2B;--up-ink:#B02E22;--up-tint:#FBECEA;
+--down:#17479E;--down-tint:#E8EEF9;--gray-tint:#EEF1F4;--dash:#8A96A3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:'Noto Sans KR',system-ui,sans-serif;
+font-size:16px;line-height:1.55;word-break:keep-all;overflow-wrap:anywhere}
+a{color:var(--teal)}a:hover{color:var(--teal-ink)}
+h1{margin:0 0 8px;font-size:30px;line-height:1.3}h2{margin:0;font-size:20px}
+p{margin:0}.sub{color:var(--sub)}.small{font-size:14px}.num{font-variant-numeric:tabular-nums}
+.up{color:var(--up-ink)}.down{color:var(--down)}
+header.top{background:var(--surface);border-bottom:1px solid var(--line)}
+.bar{max-width:1280px;margin:0 auto;padding:14px 24px;display:flex;flex-wrap:wrap;align-items:center;
+justify-content:space-between;gap:12px}
+.brand{display:flex;flex-wrap:wrap;align-items:center;gap:14px}.brand b{font-size:20px}
+.badge{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;
+background:var(--teal-tint);color:var(--teal-ink);font-size:14px;font-weight:700}
+.badge.demo{background:var(--ink);color:#fff}
+.wrap{max-width:1280px;margin:0 auto;padding:24px;display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
+nav.side{flex:1 1 200px;max-width:240px;display:flex;flex-direction:column;gap:4px}
+nav.side a{display:flex;align-items:center;justify-content:space-between;min-height:44px;padding:0 14px;
+border-radius:12px;color:var(--ink);text-decoration:none}
+nav.side a[aria-current=page]{background:var(--ink);color:#fff;font-weight:700}
+nav.side .count{font-size:13px;font-weight:700;color:var(--teal-ink)}
+nav.side a[aria-current=page] .count{color:#fff}
+main{flex:999 1 560px;min-width:0;display:flex;flex-direction:column;gap:24px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:28px;
+display:flex;flex-direction:column;gap:16px}
+.row{display:flex;flex-wrap:wrap;gap:24px;align-items:stretch}
+.row>.w3{flex:3 1 420px;min-width:0}.row>.w2{flex:2 1 300px;min-width:0}
+.between{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px}
+.btn{min-height:48px;padding:0 22px;border-radius:12px;border:1px solid var(--ink);background:var(--surface);
+color:var(--ink);font:inherit;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;
+align-items:center;justify-content:center}
+.btn.primary{background:var(--ink);color:#fff}.btn.small{min-height:44px;padding:0 16px;font-size:15px}
+.btn:disabled{border-color:var(--dash);background:var(--gray-tint);color:var(--sub);cursor:not-allowed}
+.btns{display:flex;flex-wrap:wrap;gap:12px}
+.stats{display:flex;flex-wrap:wrap;gap:12px}
+.stat{flex:1 1 132px;min-width:132px;padding:14px 16px;border-radius:12px;background:var(--ground)}
+.stat div:first-child{font-size:13px;color:var(--sub)}.stat div:last-child{font-size:26px;font-weight:700}
+ol.steps{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:12px}
+ol.steps li{flex:1 1 170px;padding:16px;border-radius:12px;background:var(--ground);display:flex;
+flex-direction:column;gap:6px}
+ol.steps .tag{font-size:13px;font-weight:700;color:var(--teal-ink)}
+ol.steps li.current{background:var(--ink);color:#fff}ol.steps li.current .tag{color:#fff}
+ol.steps li.current .small{color:var(--line)}
+ol.steps li.locked{background:none;border:1px dashed var(--dash)}ol.steps li.locked .tag{color:var(--sub)}
+.track{position:relative;height:14px;border-radius:999px}
+.track .entry{position:absolute;top:-5px;width:2px;height:24px;background:var(--sub)}
+.track .now{position:absolute;top:-6px;width:26px;height:26px;margin-left:-13px;border-radius:50%;
+background:var(--ink);border:3px solid #fff}
+.ends{display:flex;justify-content:space-between;gap:8px;font-size:14px}
+.note{padding:14px 16px;border-radius:12px;background:var(--ground);font-size:15px}
+.note.teal{background:var(--teal-tint);color:var(--teal-ink);font-weight:500}
+.note.warn{background:var(--ink);color:#fff}
+.pill{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-radius:12px}
+.pill.win{background:var(--up-tint)}.pill.loss{background:var(--down-tint)}.pill.flat{background:var(--ground)}
+.pill strong{flex:none;white-space:nowrap}.pill strong.big{font-size:20px}
+.chip{align-self:flex-start;display:inline-block;padding:6px 12px;border-radius:999px;font-size:14px;
+font-weight:700;background:var(--gray-tint);color:var(--ink)}
+.chip.pass{background:var(--teal-tint);color:var(--teal-ink)}.chip.fail{background:var(--ink);color:#fff}
+.chip.win{background:var(--up-tint);color:var(--up-ink)}.chip.loss{background:var(--down-tint);color:var(--down)}
+.meter{height:12px;border-radius:999px;background:var(--line);overflow:hidden}
+.meter div{height:12px;background:var(--teal)}
+.dots{display:flex;gap:8px;flex-wrap:wrap}
+.dots span{width:28px;height:28px;border-radius:50%;border:2px solid var(--dash)}
+.dots span.on{background:var(--ink);border-color:var(--ink)}
+.col{display:flex;flex-direction:column;gap:24px}
+details.keys summary{list-style:none}details.keys summary::-webkit-details-marker{display:none}
+details.keys[open]{flex:1 1 100%;order:2}details.keys[open] summary{margin-bottom:16px}
+ul.list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column}
+ul.list li{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;
+padding:14px 0;border-top:1px solid var(--line)}
+ul.list li:first-child{border-top:0}ul.list .chip{align-self:center}
+.unit{flex:none;white-space:nowrap}
+.switch{display:inline-flex;align-items:center;gap:10px;min-height:44px;padding:0 4px;border:0;background:none;
+color:var(--ink);font:inherit;font-size:15px;font-weight:700;cursor:pointer;border-radius:12px}
+.switch i{flex:none;position:relative;width:46px;height:26px;border-radius:999px;background:var(--dash)}
+.switch i::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;
+background:#fff;transition:left .15s}
+.switch[aria-checked=true] i{background:var(--teal)}.switch[aria-checked=true] i::after{left:23px}
+.switch[aria-checked=false]{color:var(--sub)}
+.switch:focus-visible{outline:3px solid var(--teal);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.switch i::after{transition:none}}
+ul.list a.item{flex:1 1 240px;min-width:0;color:var(--ink);text-decoration:none;display:flex;
+flex-direction:column}
+ul.tips{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px}
+ul.events{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;font-size:15px}
+ul.events li{display:flex;gap:12px}ul.events time{flex:none;width:48px;color:var(--sub)}
+ol.reasons{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:12px}
+ol.reasons li{display:flex;gap:12px;align-items:flex-start}
+ol.reasons .n{flex:none;width:28px;height:28px;border-radius:50%;background:var(--teal-tint);
+color:var(--teal-ink);font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
+dl.kv{margin:0;display:flex;flex-direction:column;gap:8px}
+dl.kv div{display:flex;justify-content:space-between;gap:12px}dl.kv dt{color:var(--sub)}dl.kv dd{margin:0}
+dl.kv .sum{padding-top:8px;border-top:1px solid var(--line);font-weight:700}dl.kv .sum dt{color:var(--ink)}
+form.fields{display:flex;flex-wrap:wrap;gap:16px}
+label.f{flex:1 1 220px;display:flex;flex-direction:column;gap:6px;font-weight:700}
+label.f span.h{font-weight:400;font-size:14px;color:var(--sub)}
+input,select{min-height:48px;padding:0 14px;border-radius:12px;border:1px solid var(--dash);font:inherit;
+background:#fff;color:var(--ink);width:100%}
+input:focus-visible,select:focus-visible,.btn:focus-visible,a:focus-visible{outline:3px solid var(--teal);
+outline-offset:2px}
+#toast{position:fixed;left:50%;bottom:88px;transform:translateX(-50%);background:var(--ink);color:#fff;
+padding:12px 18px;border-radius:12px;font-weight:700;max-width:90vw;display:none;z-index:5}
+svg.chart{width:100%;height:auto;display:block}
+@media (max-width:760px){
+h1{font-size:24px}.wrap{padding:16px;padding-bottom:88px}.card{padding:20px}.bar{padding:12px 16px}
+nav.side{position:fixed;left:0;right:0;bottom:0;max-width:none;flex-direction:row;gap:0;
+background:var(--surface);border-top:1px solid var(--line);z-index:4}
+nav.side a{flex:1;min-height:60px;justify-content:center;border-radius:0;padding:0 2px;font-size:13px;
+color:var(--sub);border-top:3px solid transparent}
+nav.side a[aria-current=page]{background:none;color:var(--ink);border-top-color:var(--ink)}
+nav.side .count{display:none}nav.side .long{display:none}
+ol.steps li{flex:1 1 100%;flex-direction:row;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:12px 14px}
+ol.steps li:not(.current) .small{display:none}ol.steps li.current .small{flex:1 1 100%}
+}
+@media (min-width:761px){nav.side .short{display:none}}
+</style>
+</head>
+<body>
+<header class="top"><div class="bar">
+<div class="brand"><b>웅덩이 트레이더</b><span id="mode" class="badge">연습 모드 · 실제 주문 없음</span></div>
+<div id="topbtn"></div>
+</div></header>
+<div class="wrap">
+<nav class="side" aria-label="메뉴" id="nav"></nav>
+<main id="view" aria-live="polite"><p class="sub">불러오는 중…</p></main>
+</div>
+<div id="toast" role="status"></div>
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+  ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const won = (n) => Math.round(n).toLocaleString("ko-KR") + "원";
+const signed = (n) => (n > 0 ? "+" : n < 0 ? "−" : "") + Math.abs(Math.round(n)).toLocaleString("ko-KR") + "원";
+const price = (n) => Math.round(n).toLocaleString("ko-KR");
+const hm = (iso) => (iso || "").slice(11, 16);
+const pct = (r) => (Math.abs(r) * 100).toFixed(1).replace(/\.0$/, "") + "%";
+let status = null, timer = null;
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {method: "POST", body: JSON.stringify(body),
+    headers: {"Content-Type": "application/json", "X-Tradebot": "1"}};
+  const res = await fetch(path, opt);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "문제가 생겼어요");
+  return data;
+}
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = "none"), 3500);
+}
+
+const NAV = [["", "홈", "홈"], ["signals", "신호", "신호"], ["favorites", "관심종목", "종목"],
+  ["backtest", "과거로 시험", "시험"], ["history", "연습 기록", "기록"], ["settings", "설정", "설정"]];
+function route() { return location.hash.replace(/^#\/?/, "").split("/"); }
+function drawNav() {
+  const cur = route()[0] === "signal" ? "signals" : route()[0];
+  $("#nav").innerHTML = NAV.map(([key, long, short]) => {
+    const count = key === "signals" && status && status.counts.open
+      ? `<span class="count">진행 중 ${status.counts.open}</span>` : "";
+    return `<a href="#/${key}" ${cur === key ? 'aria-current="page"' : ""}>` +
+      `<span class="long">${long}</span><span class="short">${short}</span>${count}</a>`;
+  }).join("");
+}
+function drawTop() {
+  if (!status) return;
+  const m = $("#mode");
+  m.textContent = status.demo ? "데모 · 가상 데이터 · 실제 주문 없음" : "연습 모드 · 실제 주문 없음";
+  m.className = "badge" + (status.demo ? " demo" : "");
+  const running = status.watch.state === "running";
+  $("#topbtn").innerHTML = running
+    ? `<button class="btn small" data-act="watch-stop">지켜보기 멈추기</button>` : "";
+}
+
+/* ---------- 조각 ---------- */
+function tracker(p) {
+  const span = p.tp - p.sl, at = (v) => Math.max(0, Math.min(100, ((v - p.sl) / span) * 100));
+  const e = at(p.entry_price).toFixed(1), n = at(p.last ?? p.entry_price).toFixed(1);
+  return `<div role="img" aria-label="손절가 ${price(p.sl)}원과 목표가 ${price(p.tp)}원 사이, 지금 ${price(p.last ?? p.entry_price)}원">
+<div class="track" style="background:linear-gradient(to right,var(--down-tint) 0%,var(--down-tint) ${e}%,var(--up-tint) ${e}%,var(--up-tint) 100%)">
+<span class="entry" style="left:${e}%"></span><span class="now" style="left:${n}%"></span></div>
+<div class="ends num" style="margin-top:8px">
+<span class="down"><b>손절가 ${price(p.sl)}</b><br><span class="sub">여기까지 내리면 팔아요</span></span>
+<span class="sub" style="text-align:center">산 가격 ${price(p.entry_price)}</span>
+<span class="up" style="text-align:right"><b>목표가 ${price(p.tp)}</b><br><span class="sub">여기까지 오르면 팔아요</span></span>
+</div></div>`;
+}
+function economicsCard(eco, kind) {
+  const k = eco.kinds[kind];
+  return `<p class="small sub">${won(eco.order_amount)}어치를 살 때, 수수료와 세금을 뺀 금액이에요.</p>
+<div class="pill win num"><span>목표가에 팔리면</span><strong class="big up">약 ${signed(k.win)}</strong></div>
+<div class="pill loss num"><span>손절가에 팔리면</span><strong class="big down">약 ${signed(k.loss)}</strong></div>
+<p>${k.need_of_10 > 5 ? "질 때 잃는 돈이 더 커서, " : ""}<b>10번 중 ${k.need_of_10}번은 목표가에 팔려야 본전</b>이에요.</p>`;
+}
+function dots(n) {
+  return `<div class="dots" role="img" aria-label="10번 중 ${n}번">` +
+    Array.from({length: 10}, (_, i) => `<span class="${i < n ? "on" : ""}"></span>`).join("") + "</div>";
+}
+function resultChip(t) {
+  if (t.stale) return `<span class="chip">결과 확인 못 함</span>`;
+  if (t.open) return `<span class="chip fail">지켜보는 중</span>`;
+  if (t.result === "WIN") return `<span class="chip win">▲ 목표가에 팔림</span>`;
+  if (t.result === "LOSS") return `<span class="chip loss">▼ 손절</span>`;
+  return `<span class="chip">시간 종료</span>`;
+}
+function tradeList(trades, empty) {
+  if (!trades.length) return `<p class="sub">${empty}</p>`;
+  return `<ul class="list">` + trades.map((t) => {
+    const amt = t.amounts ? `<strong class="num ${t.amounts.net >= 0 ? "up" : "down"}">${signed(t.amounts.net)}</strong>` : "";
+    return `<li><a class="item" href="#/signal/${encodeURIComponent(t.signal_id)}">
+<b>${esc(t.name)}</b><span class="small sub num">${esc(t.entry_time.slice(5, 10).replace("-", "/"))} ${hm(t.entry_time)} · ${price(t.entry_price)}원 × ${t.qty}주</span></a>
+${resultChip(t)}${amt}</li>`;
+  }).join("") + "</ul>";
+}
+
+/* ---------- 홈 ---------- */
+function viewHome() {
+  const s = status, running = s.watch.state === "running";
+  let title, sub, cta = "";
+  if (!s.demo && !s.has_keys) {
+    title = "먼저 토스증권과 연결해 주세요";
+    sub = "연결해도 실제 주문은 나가지 않아요. 지금은 연습만 합니다.";
+    cta = `<a class="btn primary" href="#/settings">연결하러 가기</a>`;
+  } else if (running && s.in_session) {
+    title = "지금은 연습 중이에요";
+    sub = "실제 돈은 쓰지 않습니다. 신호가 오면 연습으로 사고팔면서 결과만 기록해요.";
+  } else if (running) {
+    title = "장이 열리면 연습을 시작해요";
+    sub = "평일 오전 9시부터 오후 3시 20분까지 지켜봅니다. 켜 둔 채로 두면 돼요.";
+  } else {
+    title = "지금은 쉬고 있어요";
+    sub = "연습을 시작하면 관심종목을 지켜보다가, 신호가 오면 연습으로 사고팝니다. 실제 돈은 쓰지 않아요.";
+    cta = `<button class="btn primary" data-act="watch-start">연습 시작</button>`;
+  }
+  if (s.watch.state === "error") sub = s.watch.message;
+  const cur = s.journey.find((j) => j.status === "current");
+  const steps = s.journey.map((j) => {
+    const tag = j.status === "done" ? "완료" : j.status === "current" ? "지금 여기" : "잠김";
+    return `<li class="${j.status}"><span class="tag">${j.n} · ${tag}</span><b>${esc(j.title)}</b>
+<span class="small ${j.status === "current" ? "" : "sub"}">${esc(j.detail)}</span></li>`;
+  }).join("");
+  const pos = s.positions.length ? s.positions.map((p) => {
+    const diff = p.last - p.entry_price, cls = diff >= 0 ? "up" : "down", mark = diff >= 0 ? "▲" : "▼";
+    return `<div class="between" style="align-items:flex-end"><div><b style="font-size:18px">${esc(p.name)}</b>
+<div class="small sub num">${hm(p.entry_time)}에 ${price(p.entry_price)}원 × ${p.qty}주를 연습으로 샀어요</div></div>
+<div style="text-align:right"><div class="small sub">지금 가격</div>
+<div class="num" style="font-size:30px;font-weight:700">${price(p.last)}원</div>
+<div class="num ${cls}" style="font-weight:700">${diff === 0 ? "산 가격 그대로예요" : `${mark} 산 가격보다 ${price(Math.abs(diff))}원 ${diff > 0 ? "위" : "아래"} (${signed(p.gross_now)})`}</div></div></div>
+${tracker(p)}
+<p class="note">둘 다 안 닿으면 <b>${hm(p.deadline)}</b>에 그때 가격으로 팝니다. <a href="#/signal/${encodeURIComponent(p.signal_id)}">왜 샀는지 보기</a></p>`;
+  }).join('<hr style="border:0;border-top:1px solid var(--line);width:100%">')
+    : `<p class="sub">진행 중인 연습 매매가 없어요. 신호가 오면 여기에 나타납니다.</p>`;
+  const events = s.events.length ? `<ul class="events">` + s.events.map((e) =>
+    `<li><time class="num">${esc(e.time)}</time><span>${esc(e.text)}</span></li>`).join("") + "</ul>"
+    : `<p class="sub">아직 아무 일도 없었어요.</p>`;
+  return `<section class="card" style="flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:24px">
+<div style="flex:1 1 360px;min-width:0;display:flex;flex-direction:column;gap:12px"><div><h1>${title}</h1><p class="sub">${esc(sub)}</p></div>${cta ? `<div class="btns">${cta}</div>` : ""}</div>
+<div class="stats num"><div class="stat"><div>지켜보는 종목</div><div>${s.counts.symbols}개</div></div>
+<div class="stat"><div>오늘 온 신호</div><div>${s.counts.signals_today}번</div></div>
+<div class="stat"><div>진행 중인 매매</div><div>${s.counts.open}건</div></div></div></section>
+<section class="card"><div class="between"><h2>실전까지 5단계 중 ${cur ? cur.n : 5}단계</h2>
+<span class="small sub">앞 단계를 통과해야 다음이 열려요</span></div><ol class="steps">${steps}</ol></section>
+<div class="row"><section class="card w3"><h2>지금 진행 중인 연습 매매</h2>${pos}</section>
+<section class="card w2"><h2>한 번 거래하면 얼마가 오가나요</h2>${economicsCard(s.economics, "STOCK")}</section></div>
+<section class="card"><h2>오늘 있었던 일</h2>${events}</section>`;
+}
+
+/* ---------- 신호 ---------- */
+async function viewSignals() {
+  const h = await api("/api/history");
+  const today = status.now.slice(0, 10);
+  const list = h.trades.filter((t) => (t.open && !t.stale) || t.entry_time.slice(0, 10) === today);
+  return `<div><h1>오늘의 신호</h1><p class="sub">급하게 빠졌다가 다시 오르기 시작한 종목을 연습으로 산 기록이에요.</p></div>
+<section class="card">${tradeList(list, "오늘은 아직 신호가 없어요. 조건이 맞을 때만 나오기 때문에 하루에 한 번도 없을 수 있어요.")}</section>`;
+}
+function chart(d) {
+  const t = d.trade, bars = d.bars;
+  if (!bars.length || !t) return "";
+  // 좁은 화면에서는 그림을 줄이지 않고 좁게 다시 그린다 (글자가 작아지지 않게)
+  const narrow = window.matchMedia("(max-width: 759px)").matches;
+  const W = narrow ? 340 : 640, H = narrow ? 230 : 260, L = narrow ? 6 : 20, fs = narrow ? 13 : 14;
+  const right = W - L - (d.last ? 46 : 0);
+  const lo = Math.min(t.sl, ...bars.map((b) => b.l)), hi = Math.max(t.tp, ...bars.map((b) => b.h));
+  const pad = (hi - lo) * 0.08, y = (v) => 24 + ((hi + pad - v) / (hi - lo + 2 * pad)) * (H - 48);
+  const x = (i) => L + (i / Math.max(1, bars.length - 1)) * (right - L);
+  const pts = bars.map((b, i) => `${x(i).toFixed(1)},${y(b.c).toFixed(1)}`).join(" ");
+  const last = bars.length - 1, low = bars.reduce((a, b) => Math.min(a, b.l), Infinity);
+  const line = (v, color) => `<line x1="${L}" y1="${y(v)}" x2="${W - L}" y2="${y(v)}" stroke="${color}" stroke-width="1.5" stroke-dasharray="6 6"></line>`;
+  const nowDot = d.last ? `<circle cx="${W - L - 12}" cy="${y(d.last)}" r="7" fill="#16202B" stroke="#fff" stroke-width="3"></circle>
+<text x="${W - L - 12}" y="${y(d.last) - 14}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="#16202B">지금</text>` : "";
+  return `<svg class="chart" role="img" viewBox="0 0 ${W} ${H}" aria-label="가격이 ${price(low)}원까지 내렸다가 반등해 ${price(t.entry_price)}원에 샀습니다. 목표가 ${price(t.tp)}원, 손절가 ${price(t.sl)}원.">
+${line(t.tp, "#CF3B2B")}${line(t.entry_price, "#8A96A3")}${line(t.sl, "#17479E")}
+<polyline points="${pts}" fill="none" stroke="#16202B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+<circle cx="${x(last)}" cy="${y(bars[last].c)}" r="8" fill="#0F766E" stroke="#fff" stroke-width="3"></circle>
+<text x="${L + 4}" y="${y(t.tp) - 8}" font-size="${fs}" font-weight="700" fill="#B02E22">목표가 ${price(t.tp)}</text>
+<text x="${L + 4}" y="${y(t.entry_price) - 8}" font-size="${fs}" fill="#4B5866">산 가격 ${price(t.entry_price)}</text>
+<text x="${L + 4}" y="${y(t.sl) + 18}" font-size="${fs}" font-weight="700" fill="#17479E">손절가 ${price(t.sl)}</text>
+<text x="${x(last) - 14}" y="${y(bars[last].c) - 14}" text-anchor="end" font-size="${fs}" font-weight="700" fill="#0B5A54" stroke="#fff" stroke-width="5" stroke-linejoin="round" paint-order="stroke">여기서 샀어요</text>
+${nowDot}</svg>`;
+}
+async function viewSignal(id) {
+  const d = await api("/api/signal?id=" + encodeURIComponent(id));
+  const t = d.trade, p = d.plan;
+  if (!t) return `<h1>${esc(d.name)}</h1><p class="sub">매매 기록이 없어요.</p>`;
+  const reasons = `<ol class="reasons">` + d.reasons.map((r, i) =>
+    `<li><span class="n">${i + 1}</span><span><b>${esc(r.title)}</b> <span class="sub">${esc(r.detail)}</span></span></li>`).join("") + "</ol>";
+  let head, result = "";
+  if (t.open && !t.stale) {
+    head = `<span class="chip fail">지켜보는 중 · ${hm(d.deadline)}까지</span>`;
+  } else if (t.stale) {
+    head = `<span class="chip">결과 확인 못 함</span>`;
+    result = `<p class="note">프로그램이 중간에 꺼져서 이 매매가 어떻게 끝났는지 기록하지 못했어요.</p>`;
+  } else {
+    const a = t.amounts, cls = a.net >= 0 ? "up" : "down";
+    head = resultChip(t);
+    const why = t.result === "WIN" ? `가격이 목표가 ${price(t.tp)}원까지 올라서 약속대로 팔았어요.`
+      : t.result === "LOSS" ? `가격이 손절가 ${price(t.sl)}원 아래로 내려가서 약속대로 팔았어요. 더 떨어지기 전에 손실을 작게 끊는 게 이 규칙의 목적입니다.`
+      : `${d.max_hold_minutes}분 동안 목표가에도 손절가에도 닿지 않아서 그때 가격에 팔았어요.`;
+    result = `<section class="card"><div><div class="sub">${esc(t.result_text)}</div>
+<div class="num ${cls}" style="font-size:40px;font-weight:700;line-height:1.2">${signed(a.net)}</div></div><p>${why}</p>
+<dl class="kv num"><div><dt>${hm(t.entry_time)} 산 가격</dt><dd>${price(t.entry_price)}원 × ${t.qty}주</dd></div>
+<div><dt>${hm(t.exit_time)} 판 가격</dt><dd>${price(t.exit_price)}원 × ${t.qty}주</dd></div>
+<div class="sum" style="font-weight:400"><dt style="color:var(--sub)">가격 차이</dt><dd>${signed(a.gross)}</dd></div>
+<div><dt>수수료</dt><dd>${signed(a.commission)}</dd></div><div><dt>거래세</dt><dd>${signed(a.tax)}</dd></div>
+<div class="sum"><dt>합계</dt><dd class="${cls}">${signed(a.net)}</dd></div></dl>
+${t.result === "LOSS" && t.exit_price < t.sl ? `<p class="note small">손절가는 ${price(t.sl)}원인데 ${price(t.exit_price)}원에 판 걸로 계산했어요. 급하게 팔 때는 한 칸 낮은 가격에 팔리는 일이 많아서, 연습에서도 불리한 쪽으로 잡습니다.</p>` : ""}</section>`;
+  }
+  return `<div class="between" style="align-items:flex-end"><div><a href="#/signals"><b>← 신호 목록</b></a>
+<h1 style="margin-top:6px">${esc(d.name)} · ${t.open ? "연습으로 샀어요" : "연습 매매 결과"}</h1>
+<p class="sub num">${esc(d.detected_at.slice(0, 10))} ${hm(t.entry_time)} · 급하게 빠졌다가 다시 오르기 시작해서</p></div>${head}</div>
+${result}
+<div class="row"><section class="card w3"><h2>무슨 일이 있었나요</h2>${chart(d)}${reasons}</section>
+<div class="w2" style="display:flex;flex-direction:column;gap:24px">
+<section class="card"><h2>언제 파나요</h2><p class="small sub num">셋 중 먼저 일어나는 일에 따라 자동으로 팝니다. ${price(t.entry_price)}원 × ${t.qty}주(${won(t.entry_price * t.qty)}) 기준이에요.</p>
+<div class="pill win num"><span><b>${price(t.tp)}원까지 오르면</b><br><span class="small sub">목표가</span></span><strong class="up">약 ${signed(p.win.net)}</strong></div>
+<div class="pill loss num"><span><b>${price(t.sl)}원까지 내리면</b><br><span class="small sub">손절가 · 더 큰 손실을 막으려고 여기서 팔아요</span></span><strong class="down">약 ${signed(p.loss.net)}</strong></div>
+<div class="pill flat num"><span><b>${d.max_hold_minutes}분 안에 둘 다 아니면</b><br><span class="small sub">오래 들고 있지 않아요</span></span><strong>그때 가격에</strong></div></section>
+<section class="card"><h2>수수료와 세금</h2><p class="small sub">가격이 그대로여도 사고팔면 약 ${won(-p.flat.net)}이 나갑니다. 위 금액은 이걸 뺀 값이에요.</p></section></div></div>
+<p class="note teal">연습이라서 실제 주문은 나가지 않았어요. 계좌의 돈은 그대로입니다.</p>`;
+}
+
+/* ---------- 관심종목 ---------- */
+async function viewFavorites() {
+  const f = await api("/api/favorites"), eco = status.economics.kinds;
+  const nOn = f.symbols.filter((x) => x.enabled !== false && x.market === "KR").length;
+  const rows = f.symbols.length ? `<ul class="list">` + f.symbols.map((s) => {
+    const on = s.enabled !== false, kr = s.market === "KR";
+    return `<li><span class="item" style="flex:1 1 220px"><b>${esc(s.name || s.code)}</b>
+<span class="small sub num">${kr ? "국내" : "미국"} · ${esc(s.code)}${kr ? "" : " · 미국 종목은 아직 지켜보지 못해요"}</span></span>
+<span class="btns"><button class="switch" role="switch" aria-checked="${on}" aria-label="${esc(s.name || s.code)} 지켜보기" data-act="fav-toggle" data-m="${esc(s.market)}" data-c="${esc(s.code)}" data-on="${on ? "0" : "1"}"><i></i>${on ? "지켜보는 중" : "쉬는 중"}</button>
+<button class="btn small" data-act="fav-remove" data-m="${esc(s.market)}" data-c="${esc(s.code)}" aria-label="${esc(s.name || s.code)} 삭제">삭제</button></span></li>`;
+  }).join("") + "</ul>" : `<p class="sub">아직 종목이 없어요. 아래에서 추가해 주세요.</p>`;
+  return `<div><h1>관심종목</h1><p class="sub">여기 있는 종목만 지켜봅니다. 거래가 활발한 큰 종목 몇 개로 시작하는 걸 권해요.</p></div>
+${f.demo ? `<p class="note">데모에서는 가상 종목 3개를 씁니다. 여기서 바꾼 내용은 실제로 쓸 때 적용돼요.</p>` : ""}
+<div class="row"><div class="w3 col"><section class="card"><div class="between"><h2>지켜보는 종목</h2>
+${f.symbols.length ? `<span class="small sub">${f.symbols.length}개 중 ${nOn}개를 지켜보는 중</span>` : ""}</div>${rows}</section>
+<section class="card"><h2>종목 추가</h2>
+<form class="fields" data-form="fav-add"><label class="f">종목 코드<span class="h">국내 종목은 숫자 6자리예요. 예: 005930</span>
+<input name="code" required inputmode="numeric" maxlength="12" autocomplete="off"></label>
+<label class="f">이름<span class="h">알아보기 쉬운 이름. 비워 둬도 돼요</span><input name="name" maxlength="40" autocomplete="off"></label>
+<input type="hidden" name="market" value="KR">
+<div style="flex:1 1 100%"><button class="btn primary">추가하기</button></div></form></section></div>
+<section class="card w2"><h2>어떤 종목이 좋나요</h2>
+<ul class="tips"><li><b>거래가 많은 큰 종목부터.</b> <span class="sub">사고파는 사람이 많아야 원하는 가격에 가깝게 거래돼요.</span></li>
+<li><b>ETF는 팔 때 거래세가 없어요.</b> <span class="sub num">그래서 지금 설정으로는 10번 중 ${eco.ETF.need_of_10}번만 목표가에 팔려도 본전이에요. 주식은 ${eco.STOCK.need_of_10}번이 필요해요.</span></li>
+<li><b>처음에는 2~5개면 충분해요.</b> <span class="sub">많이 넣는다고 신호가 더 좋아지지는 않아요.</span></li></ul>
+<p class="note">미국 종목은 아직 지켜보지 못해요. 지금은 국내 종목만 됩니다.</p></section></div>`;
+}
+
+/* ---------- 과거로 시험 ---------- */
+async function viewBacktest() {
+  const b = await api("/api/backtest"), c = b.coverage, r = b.result, eco = b.economics;
+  const busy = b.backfill.state === "running" || b.backtest.state === "running";
+  clearTimeout(timer); if (busy) timer = setTimeout(render, 1500);
+  let chip, title, text;
+  if (!r) { chip = `<span class="chip">아직 안 해봤어요</span>`; title = "지난 기록에 규칙을 대 볼까요";
+    text = "실제로 해 보기 전에, 이 규칙이 과거에 통했는지 먼저 확인합니다."; }
+  else if (r.verdict === "hold") { chip = `<span class="chip">판정 보류</span>`; title = "아직 판단할 수 없어요";
+    text = "이 규칙이 과거에 통했는지 보려면 지난 가격 기록이 더 필요해요. 기록이 적으면 운이 좋았던 며칠만 보고 착각하기 쉽습니다."; }
+  else if (r.verdict === "pass") { chip = `<span class="chip pass">통과</span>`; title = "지난 기록에서는 통했어요";
+    text = "수수료와 세금을 빼고도 평균적으로 남았습니다. 그래도 과거가 미래를 보장하지는 않아서, 다음은 연습 매매로 확인해요."; }
+  else { chip = `<span class="chip fail">통과 못 함</span>`; title = "지난 기록에서는 통하지 않았어요";
+    text = "평균적으로 잃었거나, 번 것이 운일 수 있어요. 이 상태로는 실제 돈으로 넘어가지 않습니다."; }
+  const groups = r && r.groups ? Object.entries(r.groups).map(([k, g]) => {
+    const per = g.expectancy == null ? "" : ` · 한 번에 평균 ${signed(g.expectancy * eco.order_amount)}`;
+    return `<li><span class="item"><b>${k === "ETF" ? "ETF" : "일반 주식"}</b>
+<span class="small sub num">종목 ${g.symbols}개 · 검증 구간 ${g.test_days}일 · 거래 ${g.trades}번${per}</span>
+${g.passed ? "" : `<span class="small sub">${esc((g.reasons || []).join(" / "))}</span>`}</span>
+<span class="chip ${g.passed ? "pass" : "fail"}">${g.passed ? "통과" : "통과 못 함"}</span></li>`;
+  }).join("") : "";
+  const kind = (k, label, extra) => `<div style="display:flex;flex-direction:column;gap:10px">
+<div class="between"><b>${label}${extra}</b><span class="small sub num">이기면 약 ${signed(eco.kinds[k].win)} · 지면 약 ${signed(eco.kinds[k].loss)}</span></div>
+${dots(eco.kinds[k].need_of_10)}<b>10번 중 ${eco.kinds[k].need_of_10}번은 이겨야 본전</b></div>`;
+  const msg = [b.backfill, b.backtest].filter((t) => t.state !== "idle" && t.message)
+    .map((t) => `<p class="note ${t.state === "error" ? "warn" : ""}" >${esc(t.message)}</p>`).join("");
+  return `<section class="card">${chip}<h1 style="margin:0">${title}</h1><p class="sub" style="max-width:640px">${text}</p>
+<div style="max-width:640px;display:flex;flex-direction:column;gap:8px"><div class="between num"><span><b>${c.days}일치</b> 받음</span><span class="sub">최소 ${c.need}일치 필요</span></div>
+<div class="meter" role="img" aria-label="필요한 ${c.need}일 중 ${c.days}일치"><div style="width:${Math.min(100, (c.days / c.need) * 100)}%"></div></div></div>
+<div class="btns"><button class="btn ${c.days < c.need ? "primary" : ""}" data-act="backfill" ${busy || b.demo || !b.has_keys ? "disabled" : ""}>과거 기록 ${c.days ? "더 " : ""}받기</button>
+<button class="btn ${c.days >= c.need ? "primary" : ""}" data-act="backtest" ${busy ? "disabled" : ""}>${c.days < c.need ? "지금 기록으로 미리 보기" : "시험 시작"}</button></div>
+${!b.has_keys && !b.demo ? `<p class="small sub">기록을 받으려면 먼저 <a href="#/settings">토스증권과 연결</a>해 주세요.</p>` : ""}${msg}</section>
+${groups ? `<section class="card"><h2>종목 종류별 결과</h2><ul class="list">${groups}</ul>
+<p class="small sub">기록의 앞 70%로 규칙을 고르고, 나머지 30%(검증 구간)로 확인한 결과예요.</p></section>` : ""}
+<div class="row"><section class="card w3"><h2>10번 거래하면 몇 번을 이겨야 본전일까요</h2>
+<p class="sub" style="font-size:15px">이길 때 버는 돈보다 질 때 잃는 돈이 크면, 절반을 이겨도 손해예요. 수수료와 세금이 그 차이를 만듭니다.</p>
+${kind("STOCK", "일반 주식", "")}${kind("ETF", "ETF", ` <span class="sub" style="font-weight:400">(팔 때 거래세가 없어요)</span>`)}
+<p class="small sub num">${won(eco.order_amount)} 주문, 목표 +${pct(eco.tp_rate)} / 손절 −${pct(eco.sl_rate)}, 수수료 ${(eco.kinds.STOCK.commission_rate * 100).toFixed(3)}%, 주식 거래세 ${(eco.kinds.STOCK.sell_tax_rate * 100).toFixed(2)}%로 계산했어요. <a href="#/settings">설정에서 바꾸기</a></p></section>
+<section class="card w2"><h2>판정은 셋 중 하나로 나와요</h2>
+<div><span class="chip pass">통과</span><p style="font-size:15px;margin-top:6px">수수료·세금을 빼고도 평균적으로 남았고, 거래가 50번 넘어 운이라고 보기 어려울 때.</p></div>
+<div><span class="chip fail">통과 못 함</span><p style="font-size:15px;margin-top:6px">평균적으로 잃었거나, 번 것이 운일 수 있을 때. 실제 돈으로 넘어가지 않습니다.</p></div>
+<div><span class="chip">판정 보류</span><p style="font-size:15px;margin-top:6px">기록이 ${c.need}일치보다 적을 때.</p></div>
+<p class="note small">시험은 일부러 불리하게 계산해요. 같은 1분 안에 목표가와 손절가에 모두 닿았다면 손절된 것으로 칩니다.</p></section></div>`;
+}
+
+/* ---------- 연습 기록 ---------- */
+async function viewHistory() {
+  const h = await api("/api/history"), s = h.summary, NEED = 50, k = status.economics.kinds.STOCK;
+  const cls = s.net_total >= 0 ? "up" : "down";
+  return `<div><h1>연습 기록</h1><p class="sub">지금까지 연습으로 사고판 결과예요. 실제 돈은 오가지 않았습니다.</p></div>
+<section class="card"><div class="stats num"><div class="stat"><div>끝난 연습 매매</div><div>${s.closed}번</div></div>
+<div class="stat"><div>목표가에 팔림</div><div>${s.wins}번</div></div><div class="stat"><div>손절</div><div>${s.losses}번</div></div>
+<div class="stat"><div>시간 종료</div><div>${s.timeouts}번</div></div>
+<div class="stat"><div>합계 (수수료·세금 뺀 뒤)</div><div class="${s.closed ? cls : ""}">${s.closed ? signed(s.net_total) : "—"}</div></div></div>
+<div class="between" style="font-size:15px"><span class="num"><b>${NEED}번 중 ${Math.min(s.closed, NEED)}번</b> 쌓였어요</span>
+<span class="sub">${s.closed < NEED ? `${NEED}번이 쌓여야 운과 실력을 구분할 수 있어요` : "판단할 만큼 쌓였어요"}</span></div>
+<div class="meter" role="img" aria-label="필요한 ${NEED}번 중 ${Math.min(s.closed, NEED)}번의 연습 매매가 끝났습니다"><div style="width:${Math.min(100, s.closed / NEED * 100)}%"></div></div>
+<p class="note num">한 번 목표가에 팔리면 약 ${signed(k.win)}, 한 번 손절하면 약 ${signed(k.loss)}이에요. 그래서 <b>10번 중 ${k.need_of_10}번은 목표가에 팔려야 본전</b>입니다.</p></section>
+<section class="card"><h2>전체 기록</h2>${tradeList(h.trades, "아직 기록이 없어요. 연습을 시작하면 여기에 쌓입니다.")}
+${h.trades.length ? `<p class="small sub">종목을 누르면 왜 샀고 어떻게 끝났는지 볼 수 있어요.</p>` : ""}</section>`;
+}
+
+/* ---------- 설정 ---------- */
+async function viewSettings() {
+  const s = await api("/api/settings"), v = s.values, a = s.auth || {};
+  const state = status.demo ? `<span class="chip">데모에서는 연결이 필요 없어요</span>`
+    : a.ok ? `<span class="chip pass">연결됨</span>` : s.has_keys ? `<span class="chip fail">확인 필요</span>`
+    : `<span class="chip">아직 연결 안 됨</span>`;
+  const f = (name, label, hint, val, step, unit) => `<label class="f">${label}<span class="h">${hint}</span>
+<span style="display:flex;align-items:center;gap:8px;font-weight:400"><input name="${name}" type="number" step="${step}" value="${val}" required><span class="unit">${unit}</span></span></label>`;
+  const keyed = s.has_keys && !status.demo;
+  const credForm = `<form class="fields" data-form="creds"><label class="f">Client ID<span class="h">c_ 로 시작하는 값</span><input name="client_id" autocomplete="off" required ${status.demo ? "disabled" : ""}></label>
+<label class="f">Client Secret<span class="h">s_ 로 시작하는 값</span><input name="client_secret" type="password" autocomplete="off" required ${status.demo ? "disabled" : ""}></label>
+<div class="btns" style="flex:1 1 100%"><button class="btn primary" ${status.demo ? "disabled" : ""}>저장하고 연결 확인</button></div></form>`;
+  return `<div><h1>설정</h1><p class="sub">잘 모르겠으면 그대로 두셔도 됩니다. 기본값은 조심스러운 쪽으로 잡혀 있어요.</p></div>
+<section class="card"><div class="between"><h2>토스증권 연결</h2>${state}</div>
+<p class="sub" style="font-size:15px">토스증권 개발자 페이지에서 받은 키 두 개를 넣어 주세요. 키는 이 컴퓨터의 .env 파일에만 저장되고, 화면에 다시 보여주지 않아요.</p>
+${a.message && !a.ok && !status.demo ? `<p class="note"><b>${esc(a.message)}</b></p>` : ""}
+${keyed ? `<div class="btns"><button type="button" class="btn primary" data-act="auth-check">연결 다시 확인</button>
+<details class="keys"><summary class="btn">키 바꾸기</summary>${credForm}</details></div>` : credForm}</section>
+<div class="row"><section class="card w3"><h2>거래 규칙</h2>${s.watching ? `<p class="note">지금 지켜보는 중이라, 바꾼 값은 다음에 연습을 시작할 때부터 적용돼요.</p>` : ""}
+<form class="fields" data-form="settings">
+${f("order_amount", "한 번에 살 금액", "신호 한 번에 이만큼 삽니다", v.order_amount, 10000, "원")}
+${f("tp", "목표 (오르면 팔기)", "산 가격보다 이만큼 오르면 팝니다", +(v.take_profit_rate * 100).toFixed(2), 0.1, "% 위")}
+${f("sl", "손절 (내리면 팔기)", "산 가격보다 이만큼 내리면 팝니다", +(Math.abs(v.stop_loss_rate) * 100).toFixed(2), 0.1, "% 아래")}
+${f("max_hold_minutes", "최대 보유 시간", "이 시간이 지나면 그때 가격에 팝니다", v.max_hold_minutes, 1, "분")}
+${f("max_daily_entries", "하루 최대 횟수", "하루에 이 횟수까지만 삽니다", v.max_daily_entries, 1, "번")}
+${f("commission", "수수료", "살 때·팔 때 각각. 증권사 수수료를 넣어 주세요", +(v.commission_rate * 100).toFixed(4), 0.001, "%")}
+${f("tax", "주식 거래세", "주식을 팔 때 내는 세금 (ETF는 없음)", +(v.sell_tax_rate_stock * 100).toFixed(3), 0.01, "%")}
+<div style="flex:1 1 100%"><button class="btn primary">저장</button></div></form></section>
+<section class="card w2"><h2>이 설정이면 한 번 거래에</h2>${economicsCard(s.economics, "STOCK")}
+<p class="note">값을 바꾸고 저장하면 이 금액이 바로 다시 계산됩니다.</p></section></div>
+<p class="note teal">실제 주문을 켜는 설정은 없어요. 이 프로그램은 연습으로만 사고팝니다.</p>`;
+}
+
+/* ---------- 그리기 ---------- */
+async function render() {
+  clearTimeout(timer);
+  try { status = await api("/api/status"); } catch (e) { $("#view").innerHTML = `<p class="note warn">${esc(e.message)}</p>`; return; }
+  drawNav(); drawTop();
+  const [page, arg] = route();
+  try {
+    let html;
+    if (page === "") html = viewHome();
+    else if (page === "signals") html = await viewSignals();
+    else if (page === "signal") html = await viewSignal(decodeURIComponent(arg || ""));
+    else if (page === "favorites") html = await viewFavorites();
+    else if (page === "backtest") html = await viewBacktest();
+    else if (page === "history") html = await viewHistory();
+    else if (page === "settings") html = await viewSettings();
+    else html = `<h1>없는 화면이에요</h1><a href="#/">홈으로</a>`;
+    if (route().join("/") !== [page, arg].filter((x) => x !== undefined).join("/")) return;
+    $("#view").innerHTML = html;
+  } catch (e) { $("#view").innerHTML = `<p class="note warn">${esc(e.message)}</p><a href="#/">홈으로</a>`; }
+  if (page === "" || page === "signals" || page === "signal") timer = setTimeout(render, 2000);
+}
+async function act(fn, done) {
+  try { await fn(); if (done) toast(done); } catch (e) { toast(e.message); }
+  render();
+}
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-act]"); if (!b) return;
+  const a = b.dataset.act, m = b.dataset.m, c = b.dataset.c;
+  if (a === "watch-start") act(() => api("/api/watch/start", {}), "연습을 시작했어요");
+  else if (a === "watch-stop") act(() => api("/api/watch/stop", {}), "지켜보기를 멈췄어요");
+  else if (a === "fav-toggle") act(() => api("/api/favorites/toggle", {market: m, code: c, enabled: b.dataset.on === "1"}));
+  else if (a === "fav-remove") { if (confirm("이 종목을 지울까요?")) act(() => api("/api/favorites/remove", {market: m, code: c}), "지웠어요"); }
+  else if (a === "backfill") act(() => api("/api/backfill/run", {}), "과거 기록을 받기 시작했어요");
+  else if (a === "backtest") act(() => api("/api/backtest/run", {}), "시험을 시작했어요");
+  else if (a === "auth-check") act(async () => { const r = await api("/api/auth/check", {}); toast(r.message); });
+});
+document.addEventListener("submit", (ev) => {
+  const form = ev.target.closest("[data-form]"); if (!form) return;
+  ev.preventDefault();
+  const d = Object.fromEntries(new FormData(form).entries()), kind = form.dataset.form;
+  if (kind === "fav-add") act(() => api("/api/favorites/add", d), "추가했어요");
+  else if (kind === "creds") act(async () => { const r = await api("/api/credentials", d); toast(r.message); });
+  else if (kind === "settings") act(() => api("/api/settings", {
+    order_amount: d.order_amount, max_hold_minutes: d.max_hold_minutes, max_daily_entries: d.max_daily_entries,
+    take_profit_rate: d.tp / 100, stop_loss_rate: -Math.abs(d.sl) / 100,
+    commission_rate: d.commission / 100, sell_tax_rate_stock: d.tax / 100}), "저장했어요");
+});
+window.addEventListener("hashchange", render);
+render();
+</script>
+</body>
+</html>

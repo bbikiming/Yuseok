@@ -21,6 +21,7 @@ Puddle Trader CLI 설계·기획·구현 문서 모음.
 
 ## 구현/운영
 - [SETUP.md](SETUP.md) — 개발 환경 설정 가이드
+- [UI.md](UI.md) — 화면(로컬 웹): 설계 원칙, 화면별 내용, API, 보호 장치
 - [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — Phase별 구현 체크리스트
 - [../CONTRIBUTING.md](../CONTRIBUTING.md) — 개발 컨벤션
 

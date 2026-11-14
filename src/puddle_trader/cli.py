@@ -1,7 +1,7 @@
 """tradebot CLI 진입점.
 
 구현: init / auth test / favorites / backfill / data status / backtest /
-      watch(paper) / bench / latency.
+      watch(paper) / bench / latency / ui(브라우저 화면).
 스텁: 학습 루프 명령. 실주문 명령은 아직 없다 (기본 모드는 paper).
 """
 from __future__ import annotations
@@ -9,8 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import typer
-import yaml
 
+from . import favorites as favorites_store
 from .config import AppConfig, Credentials
 from .db import init_db
 
@@ -20,7 +20,6 @@ auth_app = typer.Typer(help="인증")
 app.add_typer(favorites_app, name="favorites")
 app.add_typer(auth_app, name="auth")
 
-FAVORITES_PATH = Path("config/favorites.yaml")
 
 
 @app.command()
@@ -52,16 +51,11 @@ def auth_test() -> None:
 
 
 def _load_favorites() -> dict:
-    if FAVORITES_PATH.exists():
-        return yaml.safe_load(FAVORITES_PATH.read_text(encoding="utf-8")) or {"symbols": []}
-    return {"symbols": []}
+    return favorites_store.load()
 
 
 def _save_favorites(data: dict) -> None:
-    FAVORITES_PATH.parent.mkdir(exist_ok=True)
-    FAVORITES_PATH.write_text(
-        yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
-    )
+    favorites_store.save(data)
 
 
 @favorites_app.command("add")
@@ -210,6 +204,38 @@ def watch(
         raise typer.Exit(code=1) from None
     finally:
         conn.close()
+
+
+@app.command()
+def ui(
+    port: int = typer.Option(8765, "--port"),
+    demo: bool = typer.Option(False, "--demo", help="API 키 없이 가상 데이터로 화면을 써 본다"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="브라우저 자동 열기"),
+) -> None:
+    """브라우저로 여는 화면을 띄운다 (이 컴퓨터에서만 접속 가능, 실주문 없음)."""
+    import webbrowser
+
+    from .ui.runtime import UiApp
+    from .ui.server import serve
+
+    for d in ("data", "logs", "reports", "models", "exports"):
+        Path(d).mkdir(exist_ok=True)
+    ui_app = UiApp(demo=demo)
+    url = f"http://127.0.0.1:{port}"
+    typer.echo(f"[UI] {url} 에서 화면을 엽니다. 끝내려면 Ctrl-C.")
+    if demo:
+        typer.echo("[UI] 데모: 가상 데이터로 약 3분짜리 시나리오를 보여줍니다. "
+                   "실제 주문은 없고 키도 필요 없어요.")
+        ui_app.start_watch()
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        serve(ui_app, port)
+    except KeyboardInterrupt:
+        typer.echo("\n[UI] 종료합니다.")
+    except OSError as exc:
+        typer.echo(f"[ERROR] {port}번 포트를 열 수 없어요: {exc}. --port 로 다른 번호를 써 보세요.")
+        raise typer.Exit(code=1) from None
 
 
 @app.command()
@@ -376,9 +402,8 @@ def backfill(
     """관심종목의 과거 캔들을 받아 DB 에 쌓는다 (백테스트용 기존 데이터 확보)."""
     from datetime import datetime, timedelta
 
-    from .api import TossApiError, TossClient
-    from .api.endpoints import MarketData, StockInfo
-    from .collect.backfill import backfill_symbol
+    from .api import TossClient
+    from .collect.backfill import backfill_many
     from .db import repository as repo
 
     if interval not in ("1m", "1d"):
@@ -403,30 +428,19 @@ def backfill(
     conn = _open_db()
     try:
         with TossClient(Credentials.from_env()) as client:
-            md = MarketData(client)
-            # 종목 유형(주식/ETF)은 비용 모델을 가르므로 함께 저장한다.
-            try:
-                codes = [c for _, c, _ in targets]
-                infos = {i["symbol"]: i for i in StockInfo(client).stocks(codes)}
-            except TossApiError as exc:
-                typer.echo(f"[WARN] 종목 정보 조회 실패 — 유형 미상으로 진행: {exc}")
-                infos = {}
-            for market, code, name in targets:
-                info = infos.get(code, {})
-                repo.ensure_symbol(conn, market, code, info.get("name") or name,
-                                   info.get("securityType"))
-                conn.commit()
-                try:
-                    r = backfill_symbol(md, conn, market, code, interval,
-                                        max_pages=max_pages, since=since)
-                except TossApiError as exc:
-                    typer.echo(f"[FAIL] {market}:{code} {exc}")
-                    continue
-                end = "API 끝까지 받음" if r.exhausted else "중단(기간/페이지 한도)"
+
+            def report(item) -> None:
+                if isinstance(item, tuple):
+                    typer.echo(f"[FAIL] {item[0]} {item[1]}")
+                    return
+                end = "API 끝까지 받음" if item.exhausted else "중단(기간/페이지 한도)"
                 typer.echo(
-                    f"[BACKFILL] {r.symbol_id} +{r.inserted}봉 ({r.pages}페이지) "
-                    f"{(r.oldest or '-')[:16]} ~ {(r.newest or '-')[:16]}  {end}"
+                    f"[BACKFILL] {item.symbol_id} +{item.inserted}봉 ({item.pages}페이지) "
+                    f"{(item.oldest or '-')[:16]} ~ {(item.newest or '-')[:16]}  {end}"
                 )
+
+            backfill_many(client, conn, targets, interval, since=since, max_pages=max_pages,
+                          on_result=report)
     except RuntimeError as exc:   # 자격증명 미설정
         typer.echo(f"[ERROR] {exc}")
         raise typer.Exit(code=1) from None
