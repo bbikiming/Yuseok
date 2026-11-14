@@ -105,6 +105,8 @@ def run_case(
                 boundary = base + timedelta(minutes=k)
                 scanner = Scanner(md, specs, det, ExitParams(), SessionParams(), limits,
                                   workers=case.workers, prefilter=case.prefilter,
+                                  # workers=1 은 '순차 조회' 기준선: 호가 선조회용 스레드도 끈다
+                                  speculative_books=0 if case.workers == 1 else 5,
                                   settle_seconds=settle_seconds,
                                   now_fn=clock.now, stats=stats)
                 window = scanner.tape.window
