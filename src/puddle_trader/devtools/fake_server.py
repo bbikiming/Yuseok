@@ -1,8 +1,12 @@
 """지연·한도를 주입할 수 있는 가짜 토스 API 서버 (로컬 HTTP).
 
 실제 소켓과 httpx 스택을 거치므로 스캐너의 처리 시간을 현실적으로 잴 수 있다.
-응답 지연(latency_ms), 그룹별 초당 한도(rate_limit_per_sec → 429 + Retry-After),
-분봉 반영 지연(candle_lag_ms)을 설정한다. 가격 경로는 합성 데이터다.
+가격 경로는 합성 데이터다. 주입할 수 있는 것:
+- latency_ms / jitter_ms : 요청당 응답 지연
+- connect_ms             : 새 연결마다 한 번 드는 지연 (TLS 핸드셰이크 흉내)
+- rate_limit_per_sec     : 그룹별 초당 한도 → 429 + Retry-After
+- candle_lag_ms          : 분이 바뀐 뒤 직전 봉이 보이기까지의 지연
+- new_bar_delay_ms       : 분이 바뀐 뒤 새 봉(새 분의 첫 체결)이 보이기까지의 지연
 """
 from __future__ import annotations
 
@@ -39,14 +43,20 @@ class FakeTossServer:
         signal_symbols: set[str] | None = None,
         now_fn=None,
         seed: int = 0,
+        connect_ms: float = 0.0,
+        new_bar_delay_ms: float = 0.0,
     ):
         self.latency_ms = latency_ms
         self.jitter_ms = jitter_ms
         self.rate_limit = rate_limit_per_sec
         self.candle_lag_ms = candle_lag_ms
+        self.connect_ms = connect_ms
+        self.new_bar_delay_ms = new_bar_delay_ms
+        self.connections = 0
         self.signal_symbols = signal_symbols or set()
         self.now_fn = now_fn or (lambda: datetime.now(repo.KST))
         self.price_override: dict[str, float] = {}   # 테스트에서 현재가를 바꿀 때 사용
+        self.no_trade_symbols: set[str] = set()      # 직전 1분에 체결이 없어 그 봉이 없는 종목
         self.calls: dict[str, int] = {}
         self.throttled = 0
         self.token_calls = 0
@@ -66,6 +76,13 @@ class FakeTossServer:
             # 측정값이 오염된다. Nagle 을 끄고 응답을 한 번에 쓴다.
             disable_nagle_algorithm = True
 
+            def setup(self):
+                super().setup()
+                with server._lock:
+                    server.connections += 1
+                if server.connect_ms:
+                    time.sleep(server.connect_ms / 1000)   # 연결당 1회 (TLS 핸드셰이크 흉내)
+
             def log_message(self, *args):   # 조용히
                 pass
 
@@ -77,7 +94,11 @@ class FakeTossServer:
             def do_GET(self):
                 server._handle(self, "GET")
 
-        self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        class Server(ThreadingHTTPServer):
+            # 기본 대기열(5)은 동시 연결 10여 개에서 넘쳐 SYN 재전송(1초)이 생긴다 → 측정 오염.
+            request_queue_size = 128
+
+        self._httpd = Server(("127.0.0.1", 0), Handler)
         self._httpd.daemon_threads = True
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
@@ -89,6 +110,7 @@ class FakeTossServer:
         if self._httpd:
             self._httpd.shutdown()
             self._httpd.server_close()
+            self._httpd = None
 
     def __enter__(self) -> FakeTossServer:
         return self.start()
@@ -158,6 +180,10 @@ class FakeTossServer:
             result = {"timestamp": self.now_fn().isoformat(), "currency": "KRW",
                       "asks": [{"price": str(last + 100 * k), "volume": "500"} for k in (0, 1, 2)],
                       "bids": [{"price": str(last - 100 * k), "volume": "500"} for k in (1, 2, 3)]}
+        elif url.path == "/api/v1/market-calendar/KR":
+            day = self.now_fn().date().isoformat()
+            result = {"today": {"date": day, "integrated": {"regularMarket": {
+                "startTime": f"{day}T09:00:00+09:00", "endTime": f"{day}T15:30:00+09:00"}}}}
         else:
             return self._send(h, 404, {"error": {"requestId": "fake", "code": "not-found",
                                                  "message": url.path}})
@@ -170,15 +196,22 @@ class FakeTossServer:
         return float(PUDDLE_TAIL[-1][3]) if symbol in self.signal_symbols else BASE_PRICE
 
     def _candles(self, symbol: str, count: int) -> list[dict]:
-        """현재 분 기준으로 완성봉 + 진행 중인 봉 1개. candle_lag 동안은 직전 봉이 안 보인다."""
+        """현재 분 기준으로 완성봉 + 진행 중인 봉 1개.
+
+        candle_lag 동안은 직전 봉이 안 보이고, new_bar_delay 동안은 새 분의 봉이 안 보인다.
+        """
         now = self.now_fn()
         boundary = now.replace(second=0, microsecond=0)
-        lagging = (now - boundary).total_seconds() * 1000 < self.candle_lag_ms
+        since_ms = (now - boundary).total_seconds() * 1000
+        lagging = since_ms < self.candle_lag_ms
+        new_bar_visible = not lagging and since_ms >= self.new_bar_delay_ms
         last_complete = boundary - timedelta(minutes=2 if lagging else 1)
         tail = PUDDLE_TAIL if symbol in self.signal_symbols else []
         out = []
         for k in range(count - 1):
             ts = last_complete - timedelta(minutes=k)
+            if k == 0 and symbol in self.no_trade_symbols:
+                continue
             if k < len(tail):
                 o, hi, lo, c, v = tail[len(tail) - 1 - k]
             else:
@@ -187,7 +220,7 @@ class FakeTossServer:
             out.append({"timestamp": ts.isoformat(), "openPrice": str(o), "highPrice": str(hi),
                         "lowPrice": str(lo), "closePrice": str(c), "volume": str(v),
                         "currency": "KRW"})
-        if not lagging:
+        if new_bar_visible:
             p = self._last_price(symbol)   # 진행 중인 봉
             out.insert(0, {"timestamp": boundary.isoformat(), "openPrice": str(p),
                            "highPrice": str(p), "lowPrice": str(p), "closePrice": str(p),

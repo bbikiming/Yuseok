@@ -77,9 +77,19 @@ class TossClient:
         self.on_request: Callable[[str, float, int], None] | None = None
         self.rate_limit_seen: dict[str, dict[str, str]] = {}
         self.last_date_header: str | None = None     # 서버 시각 (시계 오차 확인용)
-        self._http = httpx.Client(
-            base_url=self._base_url, timeout=self._timeout, transport=transport
+        # httpx 기본값은 쉬는 연결을 5초 뒤에 닫는다. 분 마감 때 병렬 조회가 매번 새 TLS 연결을
+        # 맺지 않도록 유지 시간을 늘린다 (서버가 먼저 끊는 경우는 사전 연결로 대비: Scanner.warm).
+        limits = httpx.Limits(
+            max_connections=int(cfg.get("max_connections", 20)),
+            max_keepalive_connections=int(cfg.get("max_connections", 20)),
+            keepalive_expiry=float(cfg.get("keepalive_seconds", 30)),
         )
+        self._http_kwargs: dict[str, Any] = {
+            "base_url": self._base_url, "timeout": self._timeout, "transport": transport,
+            "limits": limits, "http2": _http2_enabled(cfg),
+        }
+        self._http = httpx.Client(**self._http_kwargs)
+        self.http_version: str | None = None         # 마지막 응답의 HTTP 버전 (HTTP/1.1, HTTP/2)
 
     # ---- lifecycle -------------------------------------------------------
     def close(self) -> None:
@@ -101,15 +111,18 @@ class TossClient:
             return self._issue_token()
 
     def _issue_token(self) -> str:
-        resp = self._http.post(
-            self._token_url,
-            data={
-                "grant_type": "client_credentials",
-                "client_id": self._creds.client_id,
-                "client_secret": self._creds.client_secret,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
+        try:
+            resp = self._http.post(
+                self._token_url,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": self._creds.client_id,
+                    "client_secret": self._creds.client_secret,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        except httpx.HTTPError as exc:
+            raise TossApiError(0, "network-error", f"{type(exc).__name__}: {exc}") from exc
         if resp.status_code != 200:
             body = _safe_json(resp)
             raise TossApiError(
@@ -175,6 +188,7 @@ class TossClient:
     ) -> Any:
         """API 호출 후 성공 시 result 페이로드를 반환한다."""
         attempt = 0
+        net_retried = False
         group = group_of(path)
         limiter = self._limiters.get(group)
         while True:
@@ -185,10 +199,28 @@ class TossClient:
             if limiter:
                 limiter.acquire()
             started = time.perf_counter()
-            resp = self._http.request(method, path, params=params, json=json, headers=headers)
+            try:
+                resp = self._http.request(
+                    method, path, params=params, json=json, headers=headers
+                )
+            except httpx.HTTPError as exc:
+                # 전송 오류는 API 오류로 바꿔 올린다 (호출부가 TossApiError 만 처리하므로
+                # 감시 루프가 죽지 않게 한다).
+                if self.on_request:
+                    self.on_request(path, (time.perf_counter() - started) * 1000, 0)
+                if isinstance(exc, httpx.TimeoutException):
+                    # 타임아웃은 재시도하지 않는다. 재시도하면 타임아웃 × 횟수만큼 호출부가
+                    # 멈춘다. 폴링 루프가 다음 주기에 다시 시도하는 편이 낫다.
+                    raise TossApiError(0, "timeout", f"{type(exc).__name__}: {exc}") from exc
+                if method.upper() == "GET" and not net_retried:
+                    # 서버가 쉬던 연결을 끊은 경우(재사용 시점에 발견) 새 연결로 한 번만 재시도.
+                    net_retried = True
+                    continue
+                raise TossApiError(0, "network-error", f"{type(exc).__name__}: {exc}") from exc
             if self.on_request:
                 self.on_request(path, (time.perf_counter() - started) * 1000, resp.status_code)
             self.last_date_header = resp.headers.get("Date", self.last_date_header)
+            self.http_version = resp.http_version
             seen = {k: v for k, v in resp.headers.items() if k.lower().startswith("x-ratelimit")}
             if seen:
                 self.rate_limit_seen[group] = seen
@@ -215,6 +247,29 @@ class TossClient:
                 raise _to_error(resp)
             return resp.json().get("result")
 
+    def reset_connections(self) -> None:
+        """열려 있는 연결을 모두 닫는다 (연결 수립 비용 측정용). 다음 요청부터 새로 맺는다."""
+        self._http.close()
+        self._http = httpx.Client(**self._http_kwargs)
+
+    def ping(self, path: str = "/api/v1/market-calendar/KR",
+             timeout: float = 1.0) -> int | None:
+        """연결을 열어 두기 위한 가벼운 요청 1회. 재시도·속도 제한 없이 보내고 상태만 돌려준다.
+
+        사전 연결용이므로 응답 내용은 쓰지 않는다. 429 여도 연결은 맺어지므로 목적은 달성된다.
+        재시도하지 않는 이유: 재시도 대기가 곧 이어질 분 마감 조회의 스레드를 붙잡으면 안 된다.
+        기본 경로는 시세 조회와 Rate Limits Group 이 다른(MARKET_INFO) 장 운영 정보다.
+        """
+        try:
+            resp = self._http.get(
+                path, headers={"Authorization": f"Bearer {self._access_token()}"},
+                timeout=timeout,     # 짧게: 느린 사전 연결이 스레드를 오래 붙잡지 않게
+            )
+        except (httpx.HTTPError, TossApiError):
+            return None
+        self.http_version = resp.http_version
+        return resp.status_code
+
     def _rate_limit_delay(self, resp: httpx.Response, attempt: int) -> float:
         retry_after = resp.headers.get("Retry-After") or resp.headers.get("X-RateLimit-Reset")
         try:
@@ -229,6 +284,17 @@ class TossClient:
                 raise TossApiError(404, "account-not-found", "계좌를 찾을 수 없습니다.")
             self._account_seq = accounts[0]["accountSeq"]
         return self._account_seq
+
+
+def _http2_enabled(cfg: dict[str, Any]) -> bool:
+    """api.http2 가 켜져 있고 h2 패키지가 있을 때만 HTTP/2 를 시도한다 (없으면 HTTP/1.1)."""
+    if not cfg.get("http2", False):
+        return False
+    try:
+        import h2  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _safe_json(resp: httpx.Response) -> dict[str, Any]:

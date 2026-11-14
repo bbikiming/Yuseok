@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import wait
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -40,6 +41,7 @@ class BenchCase:
     workers: int = 1
     prefilter: bool = False
     client_limit: float | None = None     # 클라이언트 측 초당 요청 제한 (그룹별)
+    warm: bool = False                    # 분 마감 직전 사전 연결
 
 
 @dataclass
@@ -65,9 +67,15 @@ def run_case(
     jitter_ms: float = 0.0,
     server_limit: float | None = None,
     candle_lag_ms: float = 0.0,
-    settle_seconds: float = 0.0,
+    new_bar_delay_ms: float = 0.0,
+    connect_ms: float = 0.0,
+    idle_seconds: float = 0.0,
+    keepalive_seconds: float = 30.0,
+    settle_seconds: float = 1.0,
     cycles: int = 10,
 ) -> BenchResult:
+    """idle_seconds: 사이클 사이에 쉬는 시간. keepalive_seconds 보다 길면 연결이 닫혀
+    매 사이클이 '쉬다가 맞는 분 마감'이 된다 (실운용에서는 60초 간격)."""
     codes = [f"{k:06d}" for k in range(1, n_symbols + 1)]
     signal_codes = set(codes[:n_signals])
     specs = [SymbolSpec("KR", c, c, "STOCK") for c in codes]
@@ -82,10 +90,12 @@ def run_case(
     found = 0
     cycle_ms: list[float] = []
     with FakeTossServer(latency_ms, jitter_ms, server_limit, candle_lag_ms, signal_codes,
-                        clock.now) as server:
+                        clock.now, connect_ms=connect_ms,
+                        new_bar_delay_ms=new_bar_delay_ms) as server:
         cfg = AppConfig(api={"base_url": server.base_url, "token_cache_path": "",
                              "timeout_seconds": 15, "retry_count": 5,
                              "retry_backoff_seconds": 0.2,
+                             "keepalive_seconds": keepalive_seconds,
                              "rate_limits_per_second": limit_cfg})
         with TossClient(Credentials("bench", "bench", 1), cfg) as client:
             md = MarketData(client)
@@ -95,6 +105,7 @@ def run_case(
                 boundary = base + timedelta(minutes=k)
                 scanner = Scanner(md, specs, det, ExitParams(), SessionParams(), limits,
                                   workers=case.workers, prefilter=case.prefilter,
+                                  settle_seconds=settle_seconds,
                                   now_fn=clock.now, stats=stats)
                 window = scanner.tape.window
                 for spec in specs:                    # 테이프를 정상 운용 상태로 채운다
@@ -104,7 +115,11 @@ def run_case(
                         scanner.tape.add(spec.id, boundary - timedelta(seconds=2), 99_300.0)
                     else:
                         scanner.tape.add(spec.id, boundary - timedelta(seconds=2), BASE_PRICE)
-                clock.set(boundary + timedelta(seconds=settle_seconds))
+                if idle_seconds:
+                    time.sleep(idle_seconds)          # 쉬는 동안 연결이 닫힌다
+                if case.warm:
+                    wait(scanner.warm())              # 실운용에서는 분 마감 2초 전에 실행
+                clock.set(boundary)                   # 분이 바뀐 순간부터 잰다
                 t0 = time.perf_counter()
                 found += len(scanner.on_minute_close(boundary))
                 cycle_ms.append((time.perf_counter() - t0) * 1000)

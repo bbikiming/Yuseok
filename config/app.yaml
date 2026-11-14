@@ -18,6 +18,12 @@ api:
   rate_limits_per_second:
     MARKET_DATA: 8
     MARKET_DATA_CHART: 8
+  # 쉬는 연결을 유지하는 시간(초). httpx 기본 5초는 분 마감마다 새 TLS 연결을 맺게 만든다.
+  keepalive_seconds: 30
+  max_connections: 20
+  # HTTP/2: 연결 하나로 병렬 요청을 보낸다. `pip install "httpx[http2]"` 후 true 로 바꾸고
+  # `tradebot latency` 의 "HTTP 버전" 과 "동시 조회" 수치로 효과를 확인할 것. (실서버 미검증)
+  http2: false
   # 토큰 파일 캐시 (data/ 는 .gitignore 대상). 여러 프로세스가 같은 토큰을 공유한다.
   token_cache_path: data/.token.json
 

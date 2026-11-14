@@ -16,6 +16,10 @@ class MarketData:
     def __init__(self, client: TossClient):
         self._c = client
 
+    @property
+    def client(self) -> TossClient:
+        return self._c
+
     def prices(self, symbols: list[str]) -> list[dict[str, Any]]:
         if len(symbols) > 200:
             raise ValueError("prices 는 한 번에 최대 200 종목까지 조회 가능합니다.")

@@ -45,6 +45,29 @@ def measure_endpoints(client: TossClient, codes: list[str], samples: int = 10,
     return out
 
 
+def measure_burst(client: TossClient, code: str, n: int = 6) -> dict[str, float]:
+    """동시 n건 조회를 두 번 잰다: 연결이 닫힌 뒤(cold)와 바로 이어서(warm).
+
+    두 값의 차이가 새 연결을 맺는 비용(TLS 핸드셰이크)이다. 분 마감 때 병렬 조회가 이 비용을
+    치르지 않도록 스캐너가 사전 연결을 한다.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    md = MarketData(client)
+
+    def burst() -> float:
+        t0 = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            list(pool.map(lambda _: client.ping(), range(n)))
+        return (time.perf_counter() - t0) * 1000
+
+    md.prices([code])                       # 토큰 발급은 측정에서 제외
+    client.reset_connections()              # 열려 있던 연결을 모두 닫고
+    cold = burst()                          # 새 연결로 n건
+    warm = burst()                          # 방금 맺은 연결을 재사용해 n건
+    return {"n": n, "cold_ms": cold, "warm_ms": warm}
+
+
 def clock_offset_seconds(client: TossClient) -> float | None:
     """내 PC 시각 - 서버 시각 (초). Date 헤더는 1초 단위라 ±1초 오차가 있다."""
     if not client.last_date_header:

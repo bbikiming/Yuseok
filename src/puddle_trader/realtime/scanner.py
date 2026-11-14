@@ -14,7 +14,7 @@ import json
 import sqlite3
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -94,9 +94,13 @@ class Scanner:
         prefilter_ratio: float = 0.7,
         candle_count: int = 30,
         max_spread_rate: float = 0.004,
-        settle_retries: int = 3,
-        settle_retry_seconds: float = 0.3,
+        settle_seconds: float = 1.0,
+        probe_interval_seconds: float = 0.15,
+        candle_wait_seconds: float | None = None,
+        max_probes: int = 30,
+        warm_connections: int | None = None,
         speculative_books: int = 5,
+        max_book_age_seconds: float = 0.3,
         max_signal_age_seconds: float = 10.0,
         now_fn=None,
         sleep=time.sleep,
@@ -111,10 +115,27 @@ class Scanner:
         self.prefilter_ratio = prefilter_ratio
         self.candle_count = candle_count
         self.max_spread_rate = max_spread_rate
-        self.settle_retries = settle_retries
-        self.settle_retry_seconds = settle_retry_seconds
+        # 직전 봉을 '확정'으로 보는 조건: 새 분의 봉이 보이거나, 분 마감 후 settle 이 지났을 때.
+        # 유동성 있는 종목은 새 분의 첫 체결이 금방 나오므로 settle 을 다 기다리지 않는다.
+        self.settle = timedelta(seconds=settle_seconds)
+        self.probe_interval = probe_interval_seconds
+        # 직전 봉이 끝내 안 보이면(그 1분에 체결 없음 / 반영 지연) 이 시간 뒤 포기한다.
+        self.candle_wait = timedelta(
+            seconds=candle_wait_seconds if candle_wait_seconds is not None
+            else settle_seconds + 1.0
+        )
+        self.max_probes = max(1, max_probes)
+        # 스레드 수 = 분봉 병렬 조회(workers) + 호가 선조회(speculative_books).
+        # 호가 선조회가 분봉 조회 뒤에 줄 서면 왕복이 한 번 더 든다.
+        self._pool_size = max(1, workers) + max(0, speculative_books)
+        # 사전 연결 수. 후보 1개가 연결 2개(분봉 + 호가)를 쓴다. 기본 6개면 동시 후보 3개까지
+        # 새 연결 없이 처리한다. 더 늘리면 사전 연결 요청 자체가 초당 한도를 넘길 수 있다.
+        self.warm_connections = (min(self._pool_size, 6) if warm_connections is None
+                                 else warm_connections)
         # 후보가 이 수 이하이면 분봉과 동시에 호가도 미리 조회한다 (왕복 1회 절약).
         self.speculative_books = speculative_books
+        # 선조회한 호가가 이보다 오래됐으면(직전 봉 확정을 기다리느라) 진입 직전에 다시 조회한다.
+        self.max_book_age = max_book_age_seconds
         # 분 마감 후 이 시간이 지나면 그 신호는 버린다. 늦은 진입은 다른 가격에 사는 것이라
         # 백테스트가 가정한 거래가 아니다 (시작 직후, API 지연, 429 대기 등).
         self.max_signal_age = timedelta(seconds=max_signal_age_seconds)
@@ -126,7 +147,8 @@ class Scanner:
         self.positions: dict[str, Position] = {}
         self.closed: list[ClosedTrade] = []
         self._state = _DayState()
-        self._pool = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="scan")
+        self._book_futures: dict[str, Future] = {}    # 이번 분 마감의 호가 선조회 (종목별 최신)
+        self._pool = ThreadPoolExecutor(max_workers=self._pool_size, thread_name_prefix="scan")
         if conn is not None:
             for s in symbols:
                 repo.ensure_symbol(conn, s.market, s.code, s.name, s.security_type)
@@ -232,10 +254,20 @@ class Scanner:
         return self.tape.max_drawdown(sid) <= self.det.min_drop_rate * self.prefilter_ratio
 
     def _completed_bars(self, spec: SymbolSpec, boundary: datetime) -> list[Bar] | None:
-        """방금 닫힌 봉(boundary-1분)까지의 당일 완성봉. 아직 안 올라왔으면 잠깐 재시도한다."""
+        """방금 닫힌 봉(boundary-1분)까지의 당일 완성봉.
+
+        분이 바뀐 직후에는 직전 봉이 아직 바뀔 수 있다(늦게 도착한 체결). 확정으로 보는 조건은
+        (1) 새 분의 봉이 응답에 보이거나 (2) 분 마감 후 settle 이 지난 것. 둘 다 아니면
+        probe_interval 간격으로 다시 조회한다.
+        """
         s_open, s_close, _, _ = self._bounds(boundary)
         target = boundary - ONE_MINUTE
-        for attempt in range(self.settle_retries + 1):
+        for probe in range(self.max_probes):
+            if probe > 0 and spec.id in self._book_futures:
+                # 다시 조회할 때는 호가도 함께 새로 받는다. 직전 봉이 확정되는 순간의 호가를
+                # 쓰기 위해서다 (기다리는 사이 낡은 호가로 진입가를 정하지 않게).
+                self._book_futures[spec.id] = self._pool.submit(self._orderbook, spec)
+            sent_elapsed = self.now_fn() - boundary    # 이 응답이 담는 시점은 요청 시각 이후다
             t0 = time.perf_counter()
             try:
                 page = self.md.candles(spec.code, "1m", self.candle_count) or {}
@@ -243,18 +275,80 @@ class Scanner:
                 self.stats.count("candle_errors")
                 return None       # 데이터 오류 시 진입하지 않는다 (PRD E8)
             self.stats.add("candle_fetch_ms", (time.perf_counter() - t0) * 1000)
-            bars = [b for b in from_api(page.get("candles") or [])
-                    if s_open <= b.ts < min(boundary, s_close)]
-            if bars and bars[-1].ts == target:
-                return bars
-            if attempt < self.settle_retries:
-                self.stats.count("candle_retries")
-                self.sleep(self.settle_retry_seconds)
+            bars = [b for b in from_api(page.get("candles") or []) if s_open <= b.ts < s_close]
+            done = [b for b in bars if b.ts < boundary]
+            has_target = bool(done) and done[-1].ts == target
+            newer = any(b.ts >= boundary for b in bars)
+            elapsed = self.now_fn() - boundary
+            # settle 판정은 '요청을 보낸 시각'으로 한다. 응답 도착 시각으로 하면 settle 전에
+            # 찍힌 스냅샷을 확정으로 받아들이게 된다.
+            if has_target and (newer or sent_elapsed >= self.settle):
+                self.stats.count("final_by_new_bar" if newer else "final_by_settle")
+                self.stats.add("bar_final_age_ms", elapsed.total_seconds() * 1000)
+                return done
+            if newer and not has_target:
+                break             # 새 분의 봉은 있는데 직전 봉이 없다 = 그 1분에 체결이 없었다
+            if elapsed >= self.candle_wait or probe == self.max_probes - 1:
+                break
+            self.stats.count("candle_retries")
+            pause = self.probe_interval
+            to_settle = (self.settle - elapsed).total_seconds()
+            if 0 < to_settle <= 2 * pause:
+                pause = to_settle     # settle 직전의 헛조회를 건너뛰고 settle 시점에 맞춰 보낸다
+            self.sleep(pause)
         self.stats.count("candle_stale")   # 직전 1분에 체결이 없었거나 API 반영이 늦음
         return None
 
-    def on_minute_close(self, boundary: datetime) -> list[Position]:
-        """boundary(새 분의 시작 시각)에 방금 닫힌 봉으로 신호를 판단한다."""
+    # ---- 사전 연결 ----------------------------------------------------------
+    def expected_candidates(self, boundary: datetime) -> int:
+        """boundary 의 분 마감에서 분봉을 조회하게 될 종목 수 (사전 연결 수를 정하는 데 쓴다)."""
+        _, _, entry_from, entry_until = self._bounds(boundary)
+        if not (entry_from <= boundary < entry_until):
+            return 0
+        if self._state.entries >= self.limits.max_daily_entries:
+            return 0
+        return sum(1 for s in self.symbols if self._eligible(s, boundary))
+
+    def warm(self, n: int | None = None) -> list[Future]:
+        """분 마감 직전에 연결을 미리 맺어 둔다. 기다리지 않고 바로 돌아온다.
+
+        분 마감 때는 분봉·호가를 동시에 조회하는데, 쉬던 연결이 닫혀 있으면 요청마다 TLS
+        핸드셰이크가 붙는다. 가벼운 요청을 동시에 보내 연결을 열어 두면 그 비용이 빠진다.
+        HTTP/2 는 연결 하나로 다중 요청을 보내므로 필요 없다.
+        반환한 Future 는 벤치마크·테스트에서 완료를 기다릴 때만 쓴다.
+        """
+        n = self.warm_connections if n is None else min(n, self.warm_connections)
+        if n <= 0 or getattr(self.md.client, "http_version", None) == "HTTP/2":
+            return []
+
+        def one() -> None:
+            t0 = time.perf_counter()
+            status = self.md.client.ping()
+            if status is None:
+                self.stats.count("warm_errors")
+            elif status == 429:
+                self.stats.count("warm_throttled")   # 잦으면 warm_connections 를 줄일 것
+            self.stats.add("warm_ping_ms", (time.perf_counter() - t0) * 1000)
+
+        self.stats.count("warm_pings", n)
+        return [self._pool.submit(one) for _ in range(n)]
+
+    def _wait_all(self, futures: list[Future], pump, pump_interval: float) -> None:
+        """futures 가 끝날 때까지 기다린다. 포지션을 들고 있으면 그동안에도 pump(가격 폴링)를
+        돌려 손절 감시가 멈추지 않게 한다."""
+        pending = set(futures)
+        while pending:
+            watching = pump is not None and bool(self.positions)
+            _, pending = wait(pending, timeout=pump_interval if watching else None)
+            if pending and watching:
+                pump()
+
+    def on_minute_close(self, boundary: datetime, pump=None,
+                        pump_interval: float = 0.5) -> list[Position]:
+        """boundary(새 분의 시작 시각)에 방금 닫힌 봉으로 신호를 판단한다.
+
+        pump: 조회를 기다리는 동안 주기적으로 부를 함수(보유 포지션의 손절 감시용).
+        """
         self._roll_day(boundary)
         t0 = time.perf_counter()
         _, _, entry_from, entry_until = self._bounds(boundary)
@@ -270,10 +364,14 @@ class Scanner:
             return []
 
         # 후보가 적으면 호가를 분봉과 동시에 조회해 둔다. 신호가 났을 때 왕복 1회를 아낀다.
-        book_futures = {}
+        self._book_futures = {}
         if len(candidates) <= self.speculative_books:
-            book_futures = {s.id: self._pool.submit(self._orderbook, s) for s in candidates}
-        fetched = list(self._pool.map(lambda s: self._completed_bars(s, boundary), candidates))
+            self._book_futures = {s.id: self._pool.submit(self._orderbook, s)
+                                  for s in candidates}
+        candle_futures = [self._pool.submit(self._completed_bars, s, boundary)
+                          for s in candidates]
+        self._wait_all(candle_futures, pump, pump_interval)
+        fetched = [f.result() for f in candle_futures]
         signals: list[tuple[SymbolSpec, Signal, list[Bar]]] = []
         for spec, bars in zip(candidates, fetched, strict=True):
             if not bars:
@@ -288,11 +386,23 @@ class Scanner:
             signals.sort(key=lambda x: x[1].score, reverse=True)
             room = self.limits.max_daily_entries - self._state.entries
             signals = signals[:room]
-            pending = [book_futures.get(x[0].id) or self._pool.submit(self._orderbook, x[0])
-                       for x in signals]
-            books = [f.result() for f in pending]
-            for (spec, sig, _), book in zip(signals, books, strict=True):
-                pos = self._open_position(spec, sig, book, boundary, t0)
+            books: dict[str, dict[str, Any] | None] = {}
+            refetch: dict[str, Future] = {}
+            for spec, _, _ in signals:
+                fut = self._book_futures.get(spec.id)
+                book, fetched_at = fut.result() if fut is not None else (None, 0.0)
+                if book is not None and time.perf_counter() - fetched_at <= self.max_book_age:
+                    books[spec.id] = book
+                else:
+                    # 선조회가 없었거나 실패했거나, 직전 봉 확정을 기다리는 사이 낡았다.
+                    if book is not None:
+                        self.stats.count("book_refetched")
+                    refetch[spec.id] = self._pool.submit(self._orderbook, spec)
+            self._wait_all(list(refetch.values()), pump, pump_interval)
+            for sid, fut in refetch.items():
+                books[sid] = fut.result()[0]
+            for spec, sig, _ in signals:
+                pos = self._open_position(spec, sig, books[spec.id], boundary, t0)
                 if pos is not None:
                     opened.append(pos)
 
@@ -306,15 +416,17 @@ class Scanner:
         self.stats.add("minute_close_ms", (time.perf_counter() - t0) * 1000)
         return opened
 
-    def _orderbook(self, spec: SymbolSpec) -> dict[str, Any] | None:
+    def _orderbook(self, spec: SymbolSpec) -> tuple[dict[str, Any] | None, float]:
+        """(호가, 받은 시각). 실패하면 (None, 시각) — 호가 없이는 진입하지 않는다 (PRD §16)."""
         t0 = time.perf_counter()
         try:
             book = self.md.orderbook(spec.code)
         except TossApiError:
             self.stats.count("orderbook_errors")
-            return None           # 호가 조회 실패 시 진입 차단 (PRD §16)
-        self.stats.add("orderbook_fetch_ms", (time.perf_counter() - t0) * 1000)
-        return book
+            return None, time.perf_counter()
+        done = time.perf_counter()
+        self.stats.add("orderbook_fetch_ms", (done - t0) * 1000)
+        return book, done
 
     def _open_position(self, spec: SymbolSpec, sig: Signal, book: dict[str, Any] | None,
                        boundary: datetime, t0: float) -> Position | None:
@@ -370,15 +482,31 @@ class Scanner:
         )
 
     # ---- 3) 루프 ------------------------------------------------------------
-    def run(self, stop: threading.Event, poll_interval: float = 2.0,
-            settle_seconds: float = 1.0, on_event=None,
-            poll_interval_holding: float | None = None) -> None:
-        """장중 반복: poll_interval 마다 가격 폴링, 분이 바뀌면 settle_seconds 뒤에 탐지.
+    def run(self, stop: threading.Event, poll_interval: float = 2.0, on_event=None,
+            poll_interval_holding: float | None = 0.5, probe_start_seconds: float = 0.1,
+            warm_lead_seconds: float = 2.0) -> None:
+        """장중 반복.
 
-        포지션을 들고 있는 동안은 poll_interval_holding 으로 더 자주 본다
-        (손절 감지 지연 = 폴링 간격 + 응답 시간).
+        - poll_interval 마다 가격 폴링. 포지션 보유 중에는 poll_interval_holding 으로 더 자주
+          본다 (손절 감지 지연 = 폴링 간격 + 응답 시간).
+        - 분이 바뀌면 probe_start_seconds 뒤부터 후보 종목의 분봉을 조회한다. 직전 봉이
+          확정될 때까지의 대기는 _completed_bars 가 처리한다.
+        - 분 마감 warm_lead_seconds 전에 연결을 미리 맺는다.
         """
         done_boundary: datetime | None = None
+        warmed_for: datetime | None = None
+        holding_interval = (min(poll_interval, poll_interval_holding)
+                            if poll_interval_holding else poll_interval)
+
+        def pump() -> None:
+            """분 마감 조회를 기다리는 동안의 가격 폴링 (손절 감시)."""
+            try:
+                for trade in self.poll(self.now_fn()):
+                    if on_event:
+                        on_event("exit", trade)
+            except TossApiError:
+                self.stats.count("loop_errors")
+
         while not stop.is_set():
             now = self.now_fn()
             if self.in_session(now):
@@ -388,31 +516,45 @@ class Scanner:
                             on_event("exit", trade)
                     boundary = now.replace(second=0, microsecond=0)
                     since = (now - boundary).total_seconds()
-                    if boundary != done_boundary and since >= settle_seconds:
+                    if boundary != done_boundary and since >= probe_start_seconds:
                         done_boundary = boundary
                         if since > self.max_signal_age.total_seconds():
                             # 시작 직후이거나 루프가 밀린 경우: 이미 오래된 봉은 건너뛴다.
                             self.stats.count("stale_boundaries_skipped")
                         else:
-                            for pos in self.on_minute_close(boundary):
+                            for pos in self.on_minute_close(boundary, pump, holding_interval):
                                 if on_event:
                                     on_event("entry", pos)
+                    next_boundary = boundary + ONE_MINUTE
+                    if (warm_lead_seconds > 0 and warmed_for != next_boundary
+                            and 60.0 - since <= warm_lead_seconds):
+                        warmed_for = next_boundary
+                        # 다음 분 마감에 조회할 종목이 있을 때만, 필요한 만큼만 연다
+                        # (후보 1개 = 분봉 + 호가 = 연결 2개).
+                        self.warm(2 * self.expected_candidates(next_boundary))
                 except TossApiError as exc:
                     self.stats.count("loop_errors")
                     if on_event:
                         on_event("error", exc)
-            interval = poll_interval_holding if (self.positions and poll_interval_holding) \
-                else poll_interval
-            stop.wait(self._next_wait(self.now_fn(), done_boundary, interval, settle_seconds))
+            interval = holding_interval if self.positions else poll_interval
+            stop.wait(self._next_wait(self.now_fn(), done_boundary, interval,
+                                      probe_start_seconds, warm_lead_seconds, warmed_for))
 
     @staticmethod
     def _next_wait(now: datetime, done_boundary: datetime | None, poll_interval: float,
-                   settle_seconds: float) -> float:
-        """다음 깨어날 때까지의 시간. 분 마감 처리 시점(경계 + settle)을 놓치지 않게 맞춘다."""
+                   probe_start_seconds: float, warm_lead_seconds: float = 0.0,
+                   warmed_for: datetime | None = None) -> float:
+        """다음 깨어날 때까지의 시간. 분 마감 처리·사전 연결 시점을 놓치지 않게 맞춘다."""
         boundary = now.replace(second=0, microsecond=0)
         since = (now - boundary).total_seconds()
-        if boundary != done_boundary:
-            target = settle_seconds - since                    # 이번 분 마감이 아직 미처리
+        if boundary != done_boundary and since < probe_start_seconds:
+            target = probe_start_seconds - since               # 이번 분 마감 처리 시점까지
         else:
-            target = 60.0 - since + settle_seconds             # 다음 분 마감
+            # 이번 분은 처리했거나, 처리 시점이 지났는데 못 한 경우(장 시간 외, 폴링 실패).
+            # 후자를 '즉시 재시도'로 두면 초당 100회 헛돈다 → 폴링 간격으로 다시 시도한다.
+            target = 60.0 - since + probe_start_seconds        # 다음 분 마감
+            if warm_lead_seconds > 0 and warmed_for != boundary + ONE_MINUTE:
+                lead = 60.0 - since - warm_lead_seconds        # 사전 연결 시점
+                if lead > 0:
+                    target = min(target, lead)
         return max(0.01, min(poll_interval, target))

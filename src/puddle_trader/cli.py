@@ -184,6 +184,9 @@ def watch(
                 prefilter_ratio=float(rt.get("prefilter_ratio", 0.7)),
                 max_spread_rate=float(rt.get("max_spread_rate", 0.004)),
                 max_signal_age_seconds=float(rt.get("max_signal_age_seconds", 10.0)),
+                settle_seconds=float(rt.get("settle_seconds", 1.0)),
+                probe_interval_seconds=float(rt.get("probe_interval_seconds", 0.15)),
+                warm_connections=int(rt.get("warm_connections", 6)),
             )
             typer.echo(f"[WATCH] paper 모드, 종목 {len(specs)}개. Ctrl-C 로 종료.")
             if not scanner.in_session(datetime.now(repo.KST)):
@@ -191,9 +194,10 @@ def watch(
             if duration > 0:
                 threading.Timer(duration, stop.set).start()
             scanner.run(
-                stop, float(rt.get("poll_interval_seconds", 2.0)),
-                float(rt.get("settle_seconds", 1.0)), on_event,
-                float(rt.get("poll_interval_holding_seconds", 1.0)),
+                stop, float(rt.get("poll_interval_seconds", 2.0)), on_event,
+                float(rt.get("poll_interval_holding_seconds", 0.5)),
+                float(rt.get("probe_start_seconds", 0.1)),
+                float(rt.get("warm_lead_seconds", 2.0)),
             )
             scanner.close()
             typer.echo("[WATCH] 종료. 지연 통계:")
@@ -215,25 +219,37 @@ def bench(
     latency_ms: float = typer.Option(150, "--latency-ms", help="가짜 서버 응답 지연"),
     jitter_ms: float = typer.Option(0, "--jitter-ms"),
     server_limit: float = typer.Option(0, "--server-limit", help="서버 초당 한도 (0 = 없음)"),
+    connect_ms: float = typer.Option(0, "--connect-ms", help="새 연결 수립 지연 (TLS 흉내)"),
+    new_bar_delay_ms: float = typer.Option(
+        0, "--new-bar-delay-ms", help="분이 바뀐 뒤 새 봉이 보이기까지의 지연"
+    ),
     cycles: int = typer.Option(10, "--cycles"),
 ) -> None:
     """가짜 서버로 분 마감 처리 지연을 잰다 (API 키 불필요)."""
     from .devtools import bench as b
 
     cases = list(b.DEFAULT_CASES)
+    if connect_ms:
+        cases.append(b.BenchCase("병렬 8 + 후보 압축 + 사전 연결", workers=8, prefilter=True,
+                                 warm=True))
     if server_limit:
         cases = [b.BenchCase(c.label + ", 제한기", c.workers, c.prefilter,
-                             max(1.0, server_limit * 0.8)) for c in cases]
+                             max(1.0, server_limit * 0.8), c.warm) for c in cases]
     typer.echo(f"종목 {symbols}, 신호 {signals}, 응답 지연 {latency_ms:.0f}ms"
-               f"(+0~{jitter_ms:.0f}), 서버 한도 {server_limit or '없음'}, {cycles}사이클")
+               f"(+0~{jitter_ms:.0f}), 연결 수립 {connect_ms:.0f}ms, "
+               f"서버 한도 {server_limit or '없음'}, {cycles}사이클")
+    # 연결 수립 지연을 볼 때는 사이클 사이에 연결이 닫히도록 쉰다 (실운용의 60초 간격 흉내).
+    idle = {"idle_seconds": 1.3, "keepalive_seconds": 1.0} if connect_ms else {}
     results = [
         b.run_case(c, n_symbols=symbols, n_signals=signals, latency_ms=latency_ms,
-                   jitter_ms=jitter_ms, server_limit=server_limit or None, cycles=cycles)
+                   jitter_ms=jitter_ms, server_limit=server_limit or None,
+                   connect_ms=connect_ms, new_bar_delay_ms=new_bar_delay_ms, cycles=cycles,
+                   **idle)
         for c in cases
     ]
     typer.echo(b.format_results(results))
-    typer.echo("결정 = 분봉 조회 시작부터 진입 결정까지. 실제 신호 지연은 여기에 settle 대기와 "
-               "토스 서버의 분봉 반영 지연이 더해진다.")
+    typer.echo("결정 = 분이 바뀐 순간부터 진입 결정까지 (직전 봉 확정 대기 포함). "
+               "실제 값은 `tradebot latency` 로 잰 토스 서버 응답 시간에 따라 달라진다.")
 
 
 @app.command()
@@ -264,6 +280,13 @@ def latency(
                     typer.echo(f"  {group}: {headers}")
             else:
                 typer.echo("[LATENCY] 정상 응답에는 한도 헤더가 없습니다 (429 응답에서만 제공).")
+            typer.echo(f"[LATENCY] HTTP 버전: {client.http_version}")
+            burst = probe.measure_burst(client, codes[0])
+            typer.echo(
+                f"[LATENCY] 동시 {burst['n']}건 조회: 쉬다가 {burst['cold_ms']:.0f}ms → "
+                f"연결 재사용 {burst['warm_ms']:.0f}ms "
+                f"(차이 {burst['cold_ms'] - burst['warm_ms']:.0f}ms 가 연결 수립 비용)"
+            )
             offset = probe.clock_offset_seconds(client)
             if offset is not None:
                 typer.echo(f"[LATENCY] 시계 오차(내 PC - 서버): {offset:+.1f}s (±1s 해상도)")
@@ -281,13 +304,20 @@ def latency(
                     when = ("경계 시점에 이미 확정" if changed is None
                             else f"경계 +{changed:.0f}ms 까지 변경됨")
                     typer.echo(f"  직전 봉 확정: {when}")
-                    if lag["new_bar_first_seen_ms"] is not None:
-                        typer.echo(f"  새 봉 첫 등장: 경계 +{lag['new_bar_first_seen_ms']:.0f}ms")
+                    new_bar = lag["new_bar_first_seen_ms"]
+                    if new_bar is not None:
+                        typer.echo(f"  새 봉 첫 등장: 경계 +{new_bar:.0f}ms")
+                        if changed is not None and changed > new_bar:
+                            typer.echo("  주의: 새 봉이 보인 뒤에도 직전 봉이 바뀌었습니다. "
+                                       "'새 봉이 보이면 확정' 가정이 깨지므로 알려주세요.")
             rt = cfg.strategy.get("realtime", {})
             settle = float(rt.get("settle_seconds", 1.0)) * 1000
+            start = float(rt.get("probe_start_seconds", 0.1)) * 1000
             worst = max(res["candles 1m (30봉)"]["p95"], res["orderbook"]["p95"])
-            typer.echo(f"[LATENCY] 예상 신호 지연(분 마감 → 진입 결정): settle {settle:.0f}ms + "
-                       f"조회 p95 {worst:.0f}ms ≈ {settle + worst:.0f}ms")
+            typer.echo(
+                f"[LATENCY] 예상 신호 지연(분 마감 → 진입 결정): 새 봉이 바로 보이면 "
+                f"약 {start + worst:.0f}ms, 안 보이면 최대 {settle + worst:.0f}ms"
+            )
     except RuntimeError as exc:
         typer.echo(f"[ERROR] {exc}")
         raise typer.Exit(code=1) from None
