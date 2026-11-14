@@ -36,3 +36,17 @@ def group_by_day(bars: list[Bar]) -> dict[date, list[Bar]]:
     for b in bars:
         days.setdefault(b.ts.date(), []).append(b)
     return days
+
+
+def from_api(candles: Iterable[Mapping[str, Any]]) -> list[Bar]:
+    """토스 API 캔들(openPrice 등 문자열) → Bar 리스트(시간순)."""
+    bars = [
+        Bar(
+            datetime.fromisoformat(str(c["timestamp"]).replace("Z", "+00:00")),
+            float(c["openPrice"]), float(c["highPrice"]), float(c["lowPrice"]),
+            float(c["closePrice"]), float(c.get("volume") or 0),
+        )
+        for c in candles
+    ]
+    bars.sort(key=lambda b: b.ts)
+    return bars

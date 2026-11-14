@@ -17,6 +17,7 @@ Puddle Trader CLI 설계·기획·구현 문서 모음.
 ## API
 - [API_NOTES.md](API_NOTES.md) — 토스 OpenAPI v1.1.1 검증 결과 (PRD 대비 수정점)
 - [API_REFERENCE.md](API_REFERENCE.md) — 엔드포인트 빠른 참조
+- [LATENCY.md](LATENCY.md) — 속도·지연 검증: 측정 방법, 결과, 남은 실측 항목
 
 ## 구현/운영
 - [SETUP.md](SETUP.md) — 개발 환경 설정 가이드

@@ -41,9 +41,17 @@ tradebot data status                   # 종목별 보유 거래일 수
 tradebot backtest                      # 현재 설정으로 전체 기간 리플레이 (주식/ETF 별)
 tradebot backtest --grid               # 가설 그리드 + 표본 외 검증 → 통과/미통과 판정
 
-tradebot watch --mode paper --interval 10s   # (실시간 탐지/가상매매는 후속 구현)
+tradebot backtest --latency-sweep      # 진입이 늦어질 때 기대값이 얼마나 깎이는지
+
+# 지연 검증
+tradebot bench --latency-ms 150        # 가짜 서버로 분 마감 처리 지연 측정 (API 키 불필요)
+tradebot latency --candle-lag          # 실제 토스 API 응답 시간·한도·분봉 반영 지연 (장중)
+
+# 실시간 가상매매 (실주문 없음). 종료 시 단계별 지연 통계를 출력한다.
+tradebot watch --mode paper
 ```
 
+지연 측정 방법과 결과는 [docs/LATENCY.md](docs/LATENCY.md),
 백테스트 판정 기준과 순서는 [docs/PROFIT_PLAN.md](docs/PROFIT_PLAN.md) 참고. 비용 가정
 (`config/strategy.yaml` 의 `costs`)은 추정치이므로 실제 수수료·세금으로 먼저 맞출 것.
 

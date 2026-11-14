@@ -85,3 +85,16 @@ def test_metrics_and_pass_criteria():
     noisy = metrics.summarize([0.02, -0.019] * 30)       # 평균은 양수지만 구간이 0 을 포함
     assert noisy["expectancy"] > 0 and not metrics.passes(noisy, 50)[0]
     assert metrics.bootstrap_mean_ci(good) == metrics.bootstrap_mean_ci(good)  # 재현성
+
+
+def test_entry_model_changes_fill_price():
+    from dataclasses import replace
+
+    bars = day_with_outcome(DAY, "win")
+    fills = {
+        m: engine.simulate_day("KR:T", bars, DET, replace(EX, entry_model=m), SES, COST)[0]
+        .entry_price
+        for m in ("open", "mid", "worst")
+    }
+    # 다음 봉: 시가 99,300 / 고가 99,600 / 종가 99,500. 각각 +1틱
+    assert fills == {"open": 99400, "mid": 99500, "worst": 99700}

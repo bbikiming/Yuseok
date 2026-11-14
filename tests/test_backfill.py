@@ -125,4 +125,4 @@ def test_init_db_is_idempotent(tmp_path):
     conn = connect(path)
     cols = {r[1] for r in conn.execute("pragma table_info(symbols)")}
     assert "security_type" in cols
-    assert conn.execute("select count(*) from schema_migrations").fetchone()[0] == 2
+    assert conn.execute("select count(*) from schema_migrations").fetchone()[0] == 3

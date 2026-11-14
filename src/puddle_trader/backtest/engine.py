@@ -24,6 +24,11 @@ class ExitParams:
     stop_loss_rate: float = -0.005
     max_hold_minutes: int = 15
     weak_win_rate: float = 0.003     # 시간청산인데 이 이상 벌었으면 WEAK_WIN
+    # 진입 체결가 가정 (지연 민감도 확인용):
+    #   open  = 다음 봉 시가 (신호 직후 수 초 안에 체결)
+    #   mid   = 다음 봉 시가·종가의 중간 (평균 30초쯤 늦게 체결)
+    #   worst = 다음 봉 고가 (1분 안에서 가장 불리하게 체결)
+    entry_model: str = "open"
 
     @classmethod
     def from_config(cls, strategy_cfg: dict[str, Any] | None) -> ExitParams:
@@ -146,7 +151,13 @@ def simulate_day(
             i += 1
             continue
 
-        entry_price = cost.buy_fill(nxt.open)
+        if ex.entry_model == "worst":
+            ref = nxt.high
+        elif ex.entry_model == "mid":
+            ref = ceil_to_tick((nxt.open + nxt.close) / 2, cost.security_type)
+        else:
+            ref = nxt.open
+        entry_price = cost.buy_fill(ref)
         tp = ceil_to_tick(entry_price * (1 + ex.take_profit_rate), cost.security_type)
         sl = floor_to_tick(entry_price * (1 + ex.stop_loss_rate), cost.security_type)
         deadline = nxt.ts + timedelta(minutes=ex.max_hold_minutes)

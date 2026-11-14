@@ -14,13 +14,16 @@ from __future__ import annotations
 import hashlib
 import json as _json
 import os
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from ..config import AppConfig, Credentials
+from .ratelimit import RateLimiter, group_of
 
 
 class TossApiError(Exception):
@@ -63,6 +66,17 @@ class TossClient:
         self._token_cache: Path | None = Path(cache_path) if cache_path else None
         self._client_key = hashlib.sha256(creds.client_id.encode()).hexdigest()[:16]
         self._token: _Token | None = self._load_cached_token()
+        self._token_lock = threading.Lock()
+        # 그룹별 초당 요청 수 제한 (예: {MARKET_DATA: 8}). 없으면 제한하지 않는다.
+        self._limiters = {
+            group: RateLimiter(float(rate))
+            for group, rate in (cfg.get("rate_limits_per_second") or {}).items()
+            if rate
+        }
+        # 계측용: (path, 소요 ms, status) 를 받는 콜백과 마지막으로 본 한도 헤더
+        self.on_request: Callable[[str, float, int], None] | None = None
+        self.rate_limit_seen: dict[str, dict[str, str]] = {}
+        self.last_date_header: str | None = None     # 서버 시각 (시계 오차 확인용)
         self._http = httpx.Client(
             base_url=self._base_url, timeout=self._timeout, transport=transport
         )
@@ -79,10 +93,12 @@ class TossClient:
 
     # ---- auth ------------------------------------------------------------
     def _access_token(self) -> str:
-        now = time.time()
-        if self._token and self._token.expires_at - self._refresh_margin > now:
-            return self._token.value
-        return self._issue_token()
+        # 여러 스레드가 동시에 재발급하면 서로의 토큰을 무효화한다(client당 1개) → 직렬화.
+        with self._token_lock:
+            now = time.time()
+            if self._token and self._token.expires_at - self._refresh_margin > now:
+                return self._token.value
+            return self._issue_token()
 
     def _issue_token(self) -> str:
         resp = self._http.post(
@@ -135,8 +151,12 @@ class TossClient:
         except OSError:
             pass  # 캐시 실패는 치명적이지 않다 (메모리 캐시로 계속 동작)
 
-    def _invalidate_token(self) -> None:
-        self._token = None
+    def _invalidate_token(self, stale: str) -> None:
+        """401 을 받은 토큰만 버린다. 다른 스레드가 이미 새로 받았다면 그대로 둔다."""
+        with self._token_lock:
+            if self._token is None or self._token.value != stale:
+                return
+            self._token = None
         if self._token_cache:
             try:
                 self._token_cache.unlink(missing_ok=True)
@@ -155,19 +175,35 @@ class TossClient:
     ) -> Any:
         """API 호출 후 성공 시 result 페이로드를 반환한다."""
         attempt = 0
+        group = group_of(path)
+        limiter = self._limiters.get(group)
         while True:
-            headers = {"Authorization": f"Bearer {self._access_token()}"}
+            token = self._access_token()
+            headers = {"Authorization": f"Bearer {token}"}
             if account:
                 headers["X-Tossinvest-Account"] = str(self._require_account_seq())
+            if limiter:
+                limiter.acquire()
+            started = time.perf_counter()
             resp = self._http.request(method, path, params=params, json=json, headers=headers)
+            if self.on_request:
+                self.on_request(path, (time.perf_counter() - started) * 1000, resp.status_code)
+            self.last_date_header = resp.headers.get("Date", self.last_date_header)
+            seen = {k: v for k, v in resp.headers.items() if k.lower().startswith("x-ratelimit")}
+            if seen:
+                self.rate_limit_seen[group] = seen
 
             if resp.status_code == 429 and attempt < self._retry_count:
-                self._sleep_for_rate_limit(resp, attempt)
+                delay = self._rate_limit_delay(resp, attempt)
+                if limiter:
+                    limiter.penalize(delay)     # 다른 스레드도 함께 멈춘다
+                else:
+                    time.sleep(delay)
                 attempt += 1
                 continue
             if resp.status_code == 401 and attempt < self._retry_count:
                 # 토큰 만료/무효화 가능성 → 강제 재발급 후 재시도
-                self._invalidate_token()
+                self._invalidate_token(token)
                 attempt += 1
                 continue
             if resp.status_code >= 500 and method.upper() == "GET" and attempt < self._retry_count:
@@ -179,10 +215,12 @@ class TossClient:
                 raise _to_error(resp)
             return resp.json().get("result")
 
-    def _sleep_for_rate_limit(self, resp: httpx.Response, attempt: int) -> None:
+    def _rate_limit_delay(self, resp: httpx.Response, attempt: int) -> float:
         retry_after = resp.headers.get("Retry-After") or resp.headers.get("X-RateLimit-Reset")
-        delay = float(retry_after) if retry_after else self._backoff * (2 ** attempt)
-        time.sleep(delay)
+        try:
+            return float(retry_after) if retry_after else self._backoff * (2 ** attempt)
+        except ValueError:
+            return self._backoff * (2 ** attempt)
 
     def _require_account_seq(self) -> int:
         if self._account_seq is None:

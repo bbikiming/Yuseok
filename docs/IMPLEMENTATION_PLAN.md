@@ -17,6 +17,9 @@
 - [x] 웅덩이 탐지기 1차 (`strategy/detector.py`: 1분봉으로 계산 가능한 조건만)
 - [x] 백테스트 엔진·지표·그리드 (`backtest/`, `tradebot backtest [--grid]`)
 - [x] 승격 게이트를 승률 기준에서 비용 반영 기대값 기준으로 교체
+- [x] 실시간 스캐너 (`realtime/`: 가격 폴링 → 분 마감 탐지 → 가상 진입/청산, 단계별 지연 계측)
+- [x] `tradebot watch`(paper) / `bench` / `latency`, 클라이언트 속도 제한기, 스레드 안전 토큰
+- [x] 백테스트 진입 지연 민감도 (`--entry-model`, `--latency-sweep`)
 
 > 순서 변경: paper 를 몇 주 돌리기 전에 과거 1분봉 백테스트로 엣지 유무를 먼저 본다.
 > 근거와 통과/중단 기준은 `PROFIT_PLAN.md`. 백테스트를 통과한 조합만 아래 Phase 로 진행한다.

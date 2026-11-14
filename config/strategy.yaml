@@ -3,7 +3,7 @@ strategy:
   enabled: true
 
 scan:
-  interval_seconds: 10
+  interval_seconds: 10        # (구) 전체 스캔 주기. 실시간 루프는 아래 realtime 값을 쓴다.
   # 주의: 토스 Open API 캔들은 1m, 1d 만 지원한다.
   # 3분봉/5분봉은 1분봉을 직접 합성(resample)해서 사용한다. (candles.resample 참고)
   base_candle_interval: "1m"
@@ -61,3 +61,14 @@ backtest:
     drop_ranges: [[-0.012, -0.020], [-0.020, -0.035]]
     skip_open_minutes: [10, 30]
     market_filter: [false, true]
+
+# 실시간 감시 루프 (docs/LATENCY.md)
+realtime:
+  poll_interval_seconds: 2.0          # 전 종목 현재가 폴링 간격 (/prices 1호출)
+  poll_interval_holding_seconds: 1.0  # 포지션 보유 중 폴링 간격 (손절 감지 지연을 줄인다)
+  settle_seconds: 1.0                 # 분이 바뀐 뒤 분봉 조회까지 기다리는 시간
+  workers: 8                          # 분봉/호가 병렬 조회 스레드 수
+  prefilter: true                     # 최근 하락이 있었던 종목만 분봉 조회
+  prefilter_ratio: 0.7                # 최소 하락률의 이 비율 이상 빠졌으면 후보
+  max_spread_rate: 0.004              # 진입 시 허용 스프레드
+  max_signal_age_seconds: 10          # 분 마감 후 이보다 늦으면 진입하지 않는다
