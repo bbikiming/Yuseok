@@ -6,6 +6,7 @@ Puddle Trader CLI 설계·기획·구현 문서 모음.
 - [PRD.md](PRD.md) — 제품 요구사항 정의서 (원본 기획)
 - [DECISIONS.md](DECISIONS.md) — 주요 설계 결정과 근거 (ADR 요약)
 - [ROADMAP.md](ROADMAP.md) — 버전별 로드맵 (v0.1~v0.5)
+- [PROFIT_PLAN.md](PROFIT_PLAN.md) — 최신화 분석 + 비용 구조 + 백테스트 우선 수익화 플랜 (2026-11)
 
 ## 설계
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 계층 구조, 데이터 흐름, 모듈 매핑
