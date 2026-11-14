@@ -34,8 +34,18 @@ tradebot init                       # 디렉토리 + SQLite DB 생성
 tradebot auth test                  # 토큰 발급/계좌 조회 확인
 tradebot favorites add KR:000660 --name "SK하이닉스"
 tradebot favorites list
-tradebot watch --mode paper --interval 10s   # (탐지/가상매매는 후속 구현)
+
+# 과거 1분봉 확보 → 백테스트 (실주문 없음)
+tradebot backfill --symbol KR:069500   # 관심종목 + 추가 종목의 1분봉을 API 가 주는 끝까지
+tradebot data status                   # 종목별 보유 거래일 수
+tradebot backtest                      # 현재 설정으로 전체 기간 리플레이 (주식/ETF 별)
+tradebot backtest --grid               # 가설 그리드 + 표본 외 검증 → 통과/미통과 판정
+
+tradebot watch --mode paper --interval 10s   # (실시간 탐지/가상매매는 후속 구현)
 ```
+
+백테스트 판정 기준과 순서는 [docs/PROFIT_PLAN.md](docs/PROFIT_PLAN.md) 참고. 비용 가정
+(`config/strategy.yaml` 의 `costs`)은 추정치이므로 실제 수수료·세금으로 먼저 맞출 것.
 
 ## 구조
 

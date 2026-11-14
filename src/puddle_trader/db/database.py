@@ -18,13 +18,21 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 def init_db(db_path: str | Path) -> None:
+    """기본 스키마 + 아직 적용되지 않은 migrations 를 파일명 순으로 적용한다."""
     conn = connect(db_path)
     try:
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-        # 학습 루프 등 추가 테이블: migrations 를 파일명 순으로 적용 (모두 IF NOT EXISTS).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))"
+        )
+        applied = {r[0] for r in conn.execute("SELECT name FROM schema_migrations")}
         if MIGRATIONS_DIR.is_dir():
             for sql_file in sorted(MIGRATIONS_DIR.glob("*.sql")):
+                if sql_file.name in applied:
+                    continue
                 conn.executescript(sql_file.read_text(encoding="utf-8"))
+                conn.execute("INSERT INTO schema_migrations(name) VALUES (?)", (sql_file.name,))
         conn.commit()
     finally:
         conn.close()

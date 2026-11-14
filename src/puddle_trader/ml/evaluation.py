@@ -1,6 +1,8 @@
 """검증 지표 + 승격 게이트.
 
-핵심 지표는 승률보다 '비용 반영 기대값'과 '확률 보정(calibration)'.
+핵심 지표는 승률이 아니라 '비용 반영 기대값'과 '확률 보정(calibration)'.
+승률 기준은 두지 않는다: 손익분기 승률은 비용과 익절/손절 폭에 따라 40~90% 로 달라지므로
+(docs/PROFIT_PLAN.md §2) 고정 승률 게이트는 손실 전략을 통과시킬 수 있다.
 """
 from __future__ import annotations
 
@@ -12,7 +14,8 @@ class Metrics:
     n_train: int
     n_entry: int
     win_rate: float
-    expected_value: float     # 비용(수수료·세금·슬리피지) 반영
+    expected_value: float     # 비용(수수료·세금·슬리피지) 반영, 거래당 평균 순수익률
+    ev_ci_low: float          # expected_value 의 부트스트랩 신뢰구간 하한
     avg_win: float
     avg_loss: float
     profit_loss_ratio: float
@@ -25,8 +28,6 @@ class Metrics:
 GATE = {
     "min_train": 100,
     "min_entry": 50,
-    "min_win_rate": 0.55,
-    "min_pl_ratio": 1.1,
     "max_consec_loss": 5,
     "max_drawdown": 0.05,      # 설정값으로 외부화 권장
     "max_ece": 0.1,
@@ -51,10 +52,10 @@ def passes_gate(m: Metrics, active: Metrics | None = None) -> tuple[bool, list[s
         reasons.append(f"학습 신호 부족({m.n_train}<{GATE['min_train']})")
     if m.n_entry < GATE["min_entry"]:
         reasons.append(f"진입 부족({m.n_entry}<{GATE['min_entry']})")
-    if m.win_rate < GATE["min_win_rate"]:
-        reasons.append(f"승률 미달({m.win_rate:.2%})")
-    if m.profit_loss_ratio < GATE["min_pl_ratio"]:
-        reasons.append(f"손익비 미달({m.profit_loss_ratio:.2f})")
+    if m.expected_value <= 0:
+        reasons.append(f"비용 반영 기대값 음수({m.expected_value:+.4%})")
+    elif m.ev_ci_low <= 0:
+        reasons.append(f"기대값 신뢰구간 하한이 0 이하({m.ev_ci_low:+.4%})")
     if m.max_consec_loss > GATE["max_consec_loss"]:
         reasons.append(f"연속손실 초과({m.max_consec_loss})")
     if m.max_drawdown > GATE["max_drawdown"]:

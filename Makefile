@@ -1,4 +1,4 @@
-.PHONY: help setup install init auth test lint fmt watch clean
+.PHONY: help setup install init auth test lint fmt watch backfill backtest clean
 
 help:           ## 명령 목록
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -29,6 +29,12 @@ fmt:            ## 포맷
 
 watch:          ## 장중 감시(paper)
 	tradebot watch --mode paper --interval 10s
+
+backfill:       ## 과거 1분봉 수집 (관심종목 + KODEX 200)
+	tradebot backfill --symbol KR:069500
+
+backtest:       ## 가설 그리드 백테스트 + 표본 외 판정
+	tradebot backtest --grid
 
 clean:          ## 캐시/빌드 산출물 정리
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ *.egg-info build dist

@@ -9,11 +9,7 @@ capital:
   max_daily_entries: 5
   max_symbol_entries_per_day: 2
 
-exit:
-  take_profit_1_rate: 0.005
-  take_profit_2_rate: 0.009
-  stop_loss_rate: -0.005
-  max_hold_minutes: 15
+# 청산 기준(익절/손절/보유시간)은 strategy.yaml 의 exit 에서만 정의한다.
 
 cooldown:
   after_loss_minutes: 30

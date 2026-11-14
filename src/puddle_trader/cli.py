@@ -1,7 +1,7 @@
 """tradebot CLI 진입점.
 
-v0.1 범위: init / auth test / favorites / watch(스텁).
-실주문 관련 명령은 후속 버전에서 추가한다 (기본 모드는 paper).
+구현: init / auth test / favorites / backfill / data status / backtest.
+스텁: watch 및 학습 루프 명령. 실주문 명령은 아직 없다 (기본 모드는 paper).
 """
 from __future__ import annotations
 
@@ -105,6 +105,219 @@ def watch(
 ) -> None:
     """장중 감시 (v0.1 스텁). 웅덩이 탐지/가상매매는 후속 구현."""
     typer.echo(f"[WATCH] mode={mode} interval={interval} (구현 예정)")
+
+
+# --- 백필 / 백테스트 (PROFIT_PLAN.md 1~3단계) ---
+data_app = typer.Typer(help="수집 데이터 현황")
+app.add_typer(data_app, name="data")
+
+
+def _db_path() -> str:
+    return AppConfig.load().app.get("database_path", "data/tradebot.sqlite")
+
+
+def _open_db():
+    from .db.database import connect
+
+    path = _db_path()
+    init_db(path)   # 스키마/마이그레이션을 최신으로 맞춘다
+    return connect(path)
+
+
+def _print_coverage(conn) -> None:
+    from .db import repository as repo
+
+    rows = repo.candle_coverage(conn, "1m")
+    if not rows:
+        typer.echo("[DATA] 1분봉 없음 — `tradebot backfill` 을 먼저 실행하세요.")
+        return
+    typer.echo("[DATA] 1분봉 보유 현황")
+    for r in rows:
+        typer.echo(
+            f"  {r['symbol_id']:<12} {(r['security_type'] or '?'):<6} "
+            f"{r['days']:>4}거래일 {r['bars']:>7}봉  "
+            f"{r['first_ts'][:16]} ~ {r['last_ts'][:16]}  {r['name'] or ''}"
+        )
+
+
+@data_app.command("status")
+def data_status() -> None:
+    """종목별 1분봉 보유 범위(거래일 수)를 출력한다."""
+    conn = _open_db()
+    _print_coverage(conn)
+    conn.close()
+
+
+@app.command()
+def backfill(
+    interval: str = typer.Option("1m", "--interval", help="1m 또는 1d"),
+    days: int = typer.Option(0, "--days", help="최근 N일까지만 (0 = API 가 주는 끝까지)"),
+    symbol: list[str] = typer.Option(
+        None, "--symbol", help="추가 종목 (예: KR:069500), 반복 가능"
+    ),
+    max_pages: int = typer.Option(1000, "--max-pages", help="종목당 최대 페이지(200봉/페이지)"),
+) -> None:
+    """관심종목의 과거 캔들을 받아 DB 에 쌓는다 (백테스트용 기존 데이터 확보)."""
+    from datetime import datetime, timedelta
+
+    from .api import TossApiError, TossClient
+    from .api.endpoints import MarketData, StockInfo
+    from .collect.backfill import backfill_symbol
+    from .db import repository as repo
+
+    if interval not in ("1m", "1d"):
+        typer.echo("interval 은 1m 또는 1d 만 가능합니다.")
+        raise typer.Exit(code=1)
+    targets = [
+        (s["market"], s["code"], s.get("name"))
+        for s in _load_favorites()["symbols"] if s.get("enabled", True)
+    ]
+    for extra in symbol or []:
+        market, _, code = extra.partition(":")
+        if not code:
+            typer.echo(f"형식 오류: {extra} (KR:069500 처럼 입력)")
+            raise typer.Exit(code=1)
+        if (market, code) not in [(m, c) for m, c, _ in targets]:
+            targets.append((market, code, None))
+    if not targets:
+        typer.echo("대상 종목이 없습니다. `tradebot favorites add` 로 등록하세요.")
+        raise typer.Exit(code=1)
+
+    since = datetime.now(repo.KST) - timedelta(days=days) if days > 0 else None
+    conn = _open_db()
+    try:
+        with TossClient(Credentials.from_env()) as client:
+            md = MarketData(client)
+            # 종목 유형(주식/ETF)은 비용 모델을 가르므로 함께 저장한다.
+            try:
+                codes = [c for _, c, _ in targets]
+                infos = {i["symbol"]: i for i in StockInfo(client).stocks(codes)}
+            except TossApiError as exc:
+                typer.echo(f"[WARN] 종목 정보 조회 실패 — 유형 미상으로 진행: {exc}")
+                infos = {}
+            for market, code, name in targets:
+                info = infos.get(code, {})
+                repo.ensure_symbol(conn, market, code, info.get("name") or name,
+                                   info.get("securityType"))
+                conn.commit()
+                try:
+                    r = backfill_symbol(md, conn, market, code, interval,
+                                        max_pages=max_pages, since=since)
+                except TossApiError as exc:
+                    typer.echo(f"[FAIL] {market}:{code} {exc}")
+                    continue
+                end = "API 끝까지 받음" if r.exhausted else "중단(기간/페이지 한도)"
+                typer.echo(
+                    f"[BACKFILL] {r.symbol_id} +{r.inserted}봉 ({r.pages}페이지) "
+                    f"{(r.oldest or '-')[:16]} ~ {(r.newest or '-')[:16]}  {end}"
+                )
+    except RuntimeError as exc:   # 자격증명 미설정
+        typer.echo(f"[ERROR] {exc}")
+        raise typer.Exit(code=1) from None
+    if interval == "1m":
+        _print_coverage(conn)
+    conn.close()
+
+
+def _fmt_metrics(m: dict) -> str:
+    if m["n"] == 0:
+        return "거래 0회"
+    return (
+        f"거래 {m['n']}회 | 기대값 {m['expectancy']:+.3%}/회 "
+        f"(90% 구간 {m['ci_low']:+.3%} ~ {m['ci_high']:+.3%}) | "
+        f"수익 마감 {m['positive_rate']:.0%} | "
+        f"평균 익 {m['avg_win']:+.3%} / 손 {m['avg_loss']:+.3%} | "
+        f"최대 연속손실 {m['max_consec_loss']} | 최대낙폭 {m['max_drawdown']:.2%}"
+    )
+
+
+def _fmt_combo(c: dict) -> str:
+    return (
+        f"TP {c['take_profit_rate']:+.1%} SL {c['stop_loss_rate']:+.1%} "
+        f"하락 {c['max_drop_rate']:.1%}~{c['min_drop_rate']:.1%} "
+        f"장초반 {c['skip_open_minutes']}분 제외 장세필터 {'on' if c['market_filter'] else 'off'}"
+    )
+
+
+@app.command()
+def backtest(
+    grid: bool = typer.Option(False, "--grid", help="가설 그리드 + 표본 외 검증"),
+    save: bool = typer.Option(True, "--save/--no-save", help="결과를 DB 에 기록"),
+    top: int = typer.Option(5, "--top", help="그리드 상위 N개 출력"),
+) -> None:
+    """DB 의 과거 1분봉으로 웅덩이 전략을 리플레이한다 (실주문 없음)."""
+    import uuid
+
+    from .backtest import engine, runner
+    from .db import repository as repo
+    from .strategy.detector import DetectorParams
+
+    cfg = AppConfig.load()
+    costs_cfg = cfg.strategy.get("costs")
+    det = DetectorParams.from_config(cfg.strategy)
+    ex = engine.ExitParams.from_config(cfg.strategy)
+    session = engine.SessionParams.from_config(cfg.strategy)
+    limits = engine.LimitParams.from_config(cfg.risk)
+
+    conn = _open_db()
+    data, costs, groups = runner.load_data(conn, costs_cfg)
+    if not data:
+        typer.echo("[BACKTEST] 1분봉이 없습니다. `tradebot backfill` 을 먼저 실행하세요.")
+        conn.close()
+        raise typer.Exit(code=1)
+    days = runner.all_days(data)
+    typer.echo(f"[BACKTEST] 종목 {len(data)}개, {len(days)}거래일 ({days[0]} ~ {days[-1]})")
+    if len(days) < 20:
+        typer.echo("  주의: 20거래일 미만이라 결과를 신뢰하기 어렵습니다.")
+
+    def _save(label, split, combo, m, trades):
+        if not save:
+            return
+        run_id = f"bt_{uuid.uuid4().hex[:12]}"
+        repo.insert_backtest_run(
+            conn, run_id, label,
+            runner.params_snapshot(det, ex, session, limits, costs_cfg, combo),
+            split, str(days[0]), str(days[-1]), m, [t.to_dict() for t in trades],
+        )
+        conn.commit()
+        typer.echo(f"  저장: backtest_runs.id = {run_id}")
+
+    if not grid:
+        res = runner.run_single(data, costs, groups, det, ex, session, limits)
+        typer.echo(f"설정: {_fmt_combo(res['combo'])}")
+        for group, g in res["groups"].items():
+            typer.echo(f"\n[{group}] 종목 {len(g['symbols'])}개 / {g['days']}거래일")
+            typer.echo(f"  {_fmt_metrics(g['metrics'])}")
+            _save("single", f"all:{group}", res["combo"], g["metrics"], g["trades"])
+    else:
+        bt_cfg = cfg.strategy.get("backtest")
+        res = runner.run_grid(data, costs, groups, det, ex, session, limits, bt_cfg)
+        if not res["market_filter_available"]:
+            typer.echo("  참고: 지수 대용 종목의 1분봉이 없어 장세 필터 조합은 건너뜁니다.")
+        typer.echo(f"가설 조합 {res['n_combos']}개")
+        for group, g in res["groups"].items():
+            typer.echo(
+                f"\n[{group}] 종목 {len(g['symbols'])}개 / 표본 내 {g['train_days']}일, "
+                f"표본 외 {g['test_days']}일"
+            )
+            typer.echo("  표본 내 상위:")
+            for row in g["rows"][:top]:
+                typer.echo(f"    {_fmt_combo(row['combo'])}")
+                typer.echo(f"      {_fmt_metrics(row['in_sample'])}")
+            best = g["best"]
+            if best:
+                typer.echo(f"  선택: {_fmt_combo(best['combo'])}")
+                typer.echo(f"  표본 외: {_fmt_metrics(best['out_of_sample'])}")
+                _save("grid", f"out_of_sample:{group}", best["combo"],
+                      best["out_of_sample"], best["trades"])
+            verdict = "통과" if g["passed"] else "미통과"
+            why = "" if g["passed"] else f" — {'; '.join(g['reasons'])}"
+            typer.echo(f"  판정: {verdict}{why}")
+        typer.echo(
+            "\n통과 = 표본 외 기대값과 신뢰구간 하한이 모두 양수. "
+            "미통과면 실거래로 가지 않는다 (docs/PROFIT_PLAN.md)."
+        )
+    conn.close()
 
 
 # --- 학습 루프 명령 (LEARNING_SYSTEM.md §9) — Phase 3~4 에서 구현 ---

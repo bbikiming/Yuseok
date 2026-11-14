@@ -13,10 +13,15 @@ scan:
 
 puddle:
   drop_window_minutes: 10
-  min_drop_rate: -0.012
-  max_drop_rate: -0.035
-  require_low_support: true
-  require_volume_recovery: true
+  min_drop_rate: -0.012      # 이보다 얕은 하락은 제외
+  max_drop_rate: -0.035      # 이보다 깊은 하락은 제외
+  support_bars: 2            # 저점 이후 새 저점 없이 지난 봉 수
+  volume_lookback: 5
+  volume_factor: 1.0
+  ma_period: 5
+  # 점수 조건 가중치 (합계 대비 비율로 0~100 환산). 필수 조건 C1·C2 는 별도.
+  weights: {C4: 25, C5: 25, C6: 25, BULL: 25}
+  # 아래 두 항목은 과거 데이터가 없어 백테스트에서는 쓰지 않는다 (실시간 수집 후 적용).
   require_orderbook_stable: true
 
 entry:
@@ -24,8 +29,35 @@ entry:
   min_ai_score: 0.58
   allow_without_ai: true
 
+# 청산 기준은 여기 한 곳에서만 정의한다 (risk.yaml 의 중복 정의는 제거).
 exit:
-  take_profit_1_rate: 0.005
+  take_profit_1_rate: 0.005   # 부분 익절/알림용. 백테스트는 take_profit_2_rate 를 목표가로 쓴다.
   take_profit_2_rate: 0.009
   stop_loss_rate: -0.005
   max_hold_minutes: 15
+
+# 비용 가정. 추정치이므로 /api/v1/commissions 와 실제 체결의 tax 로 확인해 고칠 것.
+costs:
+  commission_rate: 0.00015      # 편도 0.015%
+  sell_tax_rate_stock: 0.0020   # 주식 매도 거래세
+  sell_tax_rate_etf: 0.0        # ETF/ETN 은 거래세 면제
+  slippage_ticks: 1             # 시장가 체결 시 편도 1틱 불리하게
+
+# 거래 시간 (KST). 종가 단일가(15:20~) 전에 모두 청산한다.
+session:
+  open: "09:00"
+  close: "15:20"
+  skip_open_minutes: 10
+  skip_close_minutes: 20
+
+backtest:
+  train_ratio: 0.7                 # 거래일 앞 70% 로 조합 선택, 뒤 30% 로 검증
+  min_trades_in_sample: 30
+  min_trades_out_of_sample: 50
+  market_proxy: "KR:069500"        # 지수 대용(KODEX 200). 1분봉이 있어야 장세 필터가 켜진다.
+  # 미리 정한 가설만 검증한다. 조합을 늘릴수록 우연히 좋아 보이는 결과가 나온다.
+  grid:
+    tp_sl: [[0.009, -0.005], [0.012, -0.006], [0.015, -0.007]]
+    drop_ranges: [[-0.012, -0.020], [-0.020, -0.035]]
+    skip_open_minutes: [10, 30]
+    market_filter: [false, true]

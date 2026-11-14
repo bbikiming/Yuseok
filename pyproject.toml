@@ -31,6 +31,12 @@ target-version = "py310"
 [tool.ruff.lint]
 # ruff 버전에 따라 기본 규칙이 달라지므로 명시적으로 고정한다.
 select = ["E", "F", "I", "UP", "B", "C4", "BLE", "RUF"]
+# 한글 문서/주석의 기호(×, ·, – 등)를 오탐하는 규칙은 끈다.
+ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.per-file-ignores]
 "split_openapi.py" = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+# typer 는 인자 기본값에 Option()/Argument() 를 쓰는 것이 정상 사용법이다.
+extend-immutable-calls = ["typer.Option", "typer.Argument"]

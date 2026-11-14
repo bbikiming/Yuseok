@@ -11,6 +11,16 @@
 - [x] SQLite 스키마 + init
 - [x] CLI 골격 (init/auth test/favorites/watch 스텁)
 
+- [x] 토큰 파일 캐시, 조회 API 5xx 재시도, 마이그레이션 1회 적용(`schema_migrations`)
+- [x] 과거 캔들 백필 (`collect/backfill.py`, `tradebot backfill` / `data status`)
+- [x] 비용 모델 (`costs.py`: 호가단위·수수료·거래세·슬리피지)
+- [x] 웅덩이 탐지기 1차 (`strategy/detector.py`: 1분봉으로 계산 가능한 조건만)
+- [x] 백테스트 엔진·지표·그리드 (`backtest/`, `tradebot backtest [--grid]`)
+- [x] 승격 게이트를 승률 기준에서 비용 반영 기대값 기준으로 교체
+
+> 순서 변경: paper 를 몇 주 돌리기 전에 과거 1분봉 백테스트로 엣지 유무를 먼저 본다.
+> 근거와 통과/중단 기준은 `PROFIT_PLAN.md`. 백테스트를 통과한 조합만 아래 Phase 로 진행한다.
+
 ---
 
 ## Phase 1 — 데이터 수집 & 저장  (PRD FR-004)
