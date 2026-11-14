@@ -25,7 +25,7 @@ class PredictionScorer:
         # TODO(Phase 4): models/{version}/ 에서 모델+보정기 로드
 
     @classmethod
-    def load_active(cls, conn, threshold: float) -> "PredictionScorer":
+    def load_active(cls, conn, threshold: float) -> PredictionScorer:
         """model_registry 에서 status='active' 모델을 로드. 없으면 모델 없이 동작."""
         raise NotImplementedError("Phase 4: active 모델 로딩 구현 예정")
 

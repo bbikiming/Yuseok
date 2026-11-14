@@ -22,11 +22,11 @@ def test_label_mapping():
 
 
 def _metrics(**kw):
-    base = dict(
-        n_train=120, n_entry=60, win_rate=0.58, expected_value=0.004,
-        avg_win=0.007, avg_loss=-0.005, profit_loss_ratio=1.2,
-        max_consec_loss=3, max_drawdown=0.02, calibration_ece=0.05,
-    )
+    base = {
+        "n_train": 120, "n_entry": 60, "win_rate": 0.58, "expected_value": 0.004,
+        "avg_win": 0.007, "avg_loss": -0.005, "profit_loss_ratio": 1.2,
+        "max_consec_loss": 3, "max_drawdown": 0.02, "calibration_ece": 0.05,
+    }
     base.update(kw)
     return Metrics(**base)
 

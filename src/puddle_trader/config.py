@@ -27,7 +27,7 @@ class Credentials:
     account_seq: int | None = None
 
     @classmethod
-    def from_env(cls) -> "Credentials":
+    def from_env(cls) -> Credentials:
         load_dotenv()
         client_id = os.environ.get("TOSS_CLIENT_ID", "")
         client_secret = os.environ.get("TOSS_CLIENT_SECRET", "")
@@ -49,7 +49,7 @@ class AppConfig:
     risk: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def load(cls) -> "AppConfig":
+    def load(cls) -> AppConfig:
         app_yaml = _load_yaml("app.yaml")
         return cls(
             app=app_yaml.get("app", {}),

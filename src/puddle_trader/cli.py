@@ -47,7 +47,7 @@ def auth_test() -> None:
             typer.echo("[STATUS] Ready")
     except Exception as exc:  # noqa: BLE001
         typer.echo(f"[ERROR] {exc}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
 
 def _load_favorites() -> dict:

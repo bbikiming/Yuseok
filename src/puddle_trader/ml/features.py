@@ -10,7 +10,7 @@ from typing import Any
 
 from . import FEATURE_VERSION
 
-__all__ = ["FeatureBundle", "build_features", "FEATURE_VERSION"]
+__all__ = ["FEATURE_VERSION", "FeatureBundle", "build_features"]
 
 
 @dataclass

@@ -30,7 +30,7 @@ class TossApiError(Exception):
 
 
 class _Token:
-    __slots__ = ("value", "expires_at")
+    __slots__ = ("expires_at", "value")
 
     def __init__(self, value: str, expires_at: float):
         self.value = value
@@ -55,7 +55,7 @@ class TossClient:
     def close(self) -> None:
         self._http.close()
 
-    def __enter__(self) -> "TossClient":
+    def __enter__(self) -> TossClient:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -137,7 +137,7 @@ class TossClient:
 def _safe_json(resp: httpx.Response) -> dict[str, Any]:
     try:
         return resp.json()
-    except Exception:
+    except ValueError:
         return {}
 
 

@@ -23,3 +23,14 @@ tradebot = "puddle_trader.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# ruff 버전에 따라 기본 규칙이 달라지므로 명시적으로 고정한다.
+select = ["E", "F", "I", "UP", "B", "C4", "BLE", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"split_openapi.py" = ["E501"]
