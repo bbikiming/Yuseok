@@ -63,7 +63,7 @@ form.addEventListener("submit", async (ev) => {
     const res = await fetch("/api/login", {method: "POST", body: JSON.stringify({code: document.getElementById("code").value}),
       headers: {"Content-Type": "application/json", "X-Tradebot": "1"}});
     const data = await res.json().catch(() => ({}));
-    if (res.ok) { location.replace("/"); return; }
+    if (res.ok) { location.reload(); return; }   // 주소는 그대로 두고 다시 읽는다. 알림에서 온 주소(#/signal/…)가 이어진다
     msg.textContent = data.error || "들어가지 못했어요";
   } catch (e) { msg.textContent = "컴퓨터에 닿지 못했어요. 같은 와이파이인지 확인해 주세요"; }
   go.disabled = false;
@@ -72,7 +72,7 @@ form.addEventListener("submit", async (ev) => {
 const fromQr = new URLSearchParams(location.search).get("code");
 if (fromQr) {
   document.getElementById("code").value = fromQr;
-  history.replaceState(null, "", "/");
+  history.replaceState(null, "", "/" + location.hash);
   form.requestSubmit();
 }
 </script>

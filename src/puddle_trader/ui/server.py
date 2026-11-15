@@ -385,6 +385,7 @@ def make_server(app: UiApp, port: int = 8765, phone: bool = False) -> ThreadingH
     handler = type("BoundHandler", (Handler,), {"app": app, "access": Access(phone, store=store)})
     httpd = ThreadingHTTPServer(("0.0.0.0" if phone else "127.0.0.1", port), handler)
     httpd.daemon_threads = True
+    app.phone_port = httpd.server_address[1] if phone else None
     return httpd
 
 

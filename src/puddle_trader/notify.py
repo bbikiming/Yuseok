@@ -69,6 +69,10 @@ class NotifyError(Exception):
     """화면에 보여줄 수 있는 실패 이유 (토큰이나 주소는 담지 않는다)."""
 
 
+class NotifyRejected(NotifyError):
+    """서비스가 요청 내용을 받아 주지 않음 (400). 내용을 바꿔 다시 보낼 수 있다."""
+
+
 def new_topic() -> str:
     """ntfy 주제 이름. 아는 사람은 누구나 읽고 쓸 수 있어서 추측할 수 없게 만든다."""
     return "puddle-" + secrets.token_hex(8)
@@ -84,6 +88,8 @@ def _request(method: str, url: str, telegram: bool = False, **kwargs: Any) -> ht
         raise NotifyError("알림 서비스에 닿지 못했어요. 인터넷 연결을 확인해 주세요") from None
     if res.status_code in (401, 403, 404) and telegram:
         raise NotifyError("텔레그램 토큰이 맞지 않아요")
+    if res.status_code == 400:
+        raise NotifyRejected("알림 서비스가 거절했어요 (400)")
     if res.status_code >= 400:
         raise NotifyError(f"알림 서비스가 거절했어요 ({res.status_code})")
     return res
@@ -104,20 +110,38 @@ def find_telegram_chat(cfg: NotifyConfig) -> str:
     raise NotifyError("텔레그램에서 만든 봇에게 먼저 아무 말이나 보낸 뒤 다시 눌러 주세요")
 
 
-def send(cfg: NotifyConfig, title: str, body: str) -> None:
-    """지금 바로 한 번 보낸다. 실패하면 NotifyError."""
+LINK_LABEL = "신호 화면 열기"
+
+
+def send(cfg: NotifyConfig, title: str, body: str, link: str | None = None) -> None:
+    """지금 바로 한 번 보낸다. 실패하면 NotifyError.
+
+    link 를 주면 알림을 눌렀을 때 그 주소(신호 화면)가 열리게 한다.
+    """
     if cfg.channel == "telegram":
         if not cfg.ready:
             raise NotifyError("텔레그램 설정이 아직 끝나지 않았어요")
-        _request("POST", f"{cfg.telegram_api}/bot{cfg.telegram_token}/sendMessage",
-                 json={"chat_id": cfg.telegram_chat, "text": f"{title}\n{body}",
-                       "disable_web_page_preview": True},
-                 telegram=True)
+        url = f"{cfg.telegram_api}/bot{cfg.telegram_token}/sendMessage"
+        message = {"chat_id": cfg.telegram_chat, "text": f"{title}\n{body}",
+                   "disable_web_page_preview": True}
+        if link is None:
+            _request("POST", url, json=message, telegram=True)
+            return
+        button = {"inline_keyboard": [[{"text": LINK_LABEL, "url": link}]]}
+        try:
+            _request("POST", url, json={**message, "reply_markup": button}, telegram=True)
+        except NotifyRejected:
+            # 텔레그램이 버튼 주소(집 안 주소)를 받아 주지 않으면, 주소를 글로 붙여 다시 보낸다
+            plain = {**message, "text": f"{title}\n{body}\n{LINK_LABEL}: {link}"}
+            _request("POST", url, json=plain, telegram=True)
     elif cfg.channel == "ntfy":
         if not cfg.ready:
             raise NotifyError("ntfy 주제 이름이 아직 없어요")
-        _request("POST", cfg.ntfy_server.rstrip("/") + "/",
-                 json={"topic": cfg.ntfy_topic, "title": title, "message": body})
+        message = {"topic": cfg.ntfy_topic, "title": title, "message": body}
+        if link is not None:
+            message["click"] = link          # 알림을 누르면 열리는 주소
+            message["actions"] = [{"action": "view", "label": LINK_LABEL, "url": link}]
+        _request("POST", cfg.ntfy_server.rstrip("/") + "/", json=message)
     else:
         raise NotifyError("알림이 꺼져 있어요")
 
@@ -159,7 +183,7 @@ class Notifier:
     def __init__(self, config_fn: Callable[[], NotifyConfig] = NotifyConfig.from_env,
                  min_interval: float = 1.0):
         self._config_fn = config_fn
-        self._queue: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=50)
+        self._queue: queue.Queue[tuple[str, str, str | None]] = queue.Queue(maxsize=50)
         self._min_interval = min_interval
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -168,14 +192,14 @@ class Notifier:
     def config(self) -> NotifyConfig:
         return self._config_fn()
 
-    def submit(self, kind: str, title: str, body: str) -> bool:
+    def submit(self, kind: str, title: str, body: str, link: str | None = None) -> bool:
         """kind: entry / exit. 설정에서 꺼 둔 종류이거나 알림이 꺼져 있으면 보내지 않는다."""
         cfg = self.config()
         if not cfg.ready or (kind == "entry" and not cfg.on_entry) \
                 or (kind == "exit" and not cfg.on_exit):
             return False
         try:
-            self._queue.put_nowait((title, body))
+            self._queue.put_nowait((title, body, link))
         except queue.Full:
             return False            # 밀린 알림이 너무 많으면 버린다 (감시가 먼저다)
         with self._lock:
@@ -200,11 +224,11 @@ class Notifier:
     def _drain(self) -> None:
         while True:
             try:
-                title, body = self._queue.get(timeout=0.3)
+                title, body, link = self._queue.get(timeout=0.3)
             except queue.Empty:
                 return
             try:
-                send(self.config(), title, body)
+                send(self.config(), title, body, link)
                 self._record(True, "")
             except NotifyError as exc:
                 self._record(False, str(exc))

@@ -742,6 +742,9 @@ async function viewSettings() {
   const ntTopic = nt.channel === "ntfy" && nt.ntfy.topic ? `<div class="stats"><div class="stat" style="flex:1 1 260px"><div>주제 이름 (남에게 알려 주지 마세요)</div><div class="num" style="font-size:18px;overflow-wrap:anywhere">${esc(nt.ntfy.topic)}</div></div></div>` : "";
   const notifyCard = `<section class="card"><div class="between"><h2>휴대폰 알림</h2>${ntState}</div>
 ${ntGuide}${ntTopic}${ntLast}
+${nt.channel && !status.remote ? `<p class="small sub">${status.phone && status.phone.enabled
+    ? "알림을 누르면 그 신호 화면이 바로 열려요 (휴대폰이 같은 와이파이에 있을 때)."
+    : "알림을 눌러 그 신호 화면이 열리게 하려면 <b>tradebot ui --phone</b> 으로 켜 주세요. 지금은 알림에 주소가 붙지 않아요."}</p>` : ""}
 ${status.remote ? `<p class="note">알림 설정은 컴퓨터에서만 바꿀 수 있어요.</p>
 ${nt.ready ? `<div class="btns"><button type="button" class="btn primary" data-act="notify-test">시험 알림 보내기</button></div>` : ""}`
     : `<form class="fields" data-form="notify">

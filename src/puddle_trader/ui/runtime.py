@@ -11,6 +11,7 @@ from collections import deque
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from .. import favorites
 from .. import notify as notify_mod
@@ -26,6 +27,7 @@ from ..db.database import connect
 from ..realtime.scanner import Scanner, SymbolSpec
 from ..strategy.detector import DetectorParams
 from . import service
+from .access import lan_addresses
 
 DEMO_SYMBOLS = [("900001", "예시종목 A"), ("900002", "예시종목 B"), ("900003", "예시종목 C")]
 
@@ -139,6 +141,7 @@ class UiApp:
         self._prev_loading = False
         self._prev_retry_at = 0.0
         self.notifier = notify_mod.Notifier()
+        self.phone_port: int | None = None    # 휴대폰 접속을 켰을 때의 포트 (알림 링크에 쓴다)
         self.prev_close_pause = 0.2     # 일봉 조회 사이 쉬는 시간 (신호 조회를 막지 않게)
         self.now_fn = service.now_kst
 
@@ -283,11 +286,13 @@ class UiApp:
                 return
             task.set(message=f"종목 {len(specs)}개를 지켜보는 중")
             try:      # 알림은 뒤에서 나간다. 문구를 만들다 실패해도 감시는 계속한다
+                link = self.signal_link(obj.signal_id)        # 알림을 누르면 이 신호 화면이 열린다
                 if kind == "entry":
-                    self.notifier.submit("entry", *service.entry_notice(cfg, obj, self.demo))
+                    self.notifier.submit("entry", *service.entry_notice(cfg, obj, self.demo), link)
                 elif kind == "exit" and obj.symbol_id in by_id:
                     spec = by_id[obj.symbol_id]
-                    self.notifier.submit("exit", *service.exit_notice(cfg, spec, obj, self.demo))
+                    self.notifier.submit("exit", *service.exit_notice(cfg, spec, obj, self.demo),
+                                         link)
             except Exception:  # noqa: BLE001 - 알림 때문에 연습 매매가 멈추면 안 된다
                 pass
 
@@ -356,6 +361,18 @@ class UiApp:
                 self._prev_loading = False
 
         threading.Thread(target=work, daemon=True).start()
+
+    def signal_link(self, signal_id: str) -> str | None:
+        """휴대폰에서 그 신호 화면을 여는 주소. 휴대폰 접속이 꺼져 있으면 열 수 없으므로 없다.
+
+        같은 와이파이에서만 열린다. 접속 코드는 넣지 않는다 (알림은 바깥 서비스를 거치므로).
+        """
+        if self.phone_port is None:
+            return None
+        ips = lan_addresses()
+        if not ips:
+            return None
+        return f"http://{ips[0]}:{self.phone_port}/#/signal/{quote(signal_id, safe='')}"
 
     def watchlist(self) -> list[dict[str, Any]]:
         """옆 패널의 관심종목: 이름·코드·지켜보는지·최신 가격과 등락률(감시 중일 때만)·보유 여부."""

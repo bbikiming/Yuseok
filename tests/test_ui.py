@@ -351,6 +351,7 @@ class FakePush:
         self.requests: list[tuple[str, str, dict]] = []
         self.updates: list[dict] = []
         self.status = 200
+        self.reject_buttons = False      # 텔레그램이 버튼 주소를 받아 주지 않는 경우
 
         class H(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -370,6 +371,12 @@ class FakePush:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 fake.requests.append(("POST", self.path, body))
+                if fake.reject_buttons and "reply_markup" in body:
+                    self.send_response(400)
+                    self.send_header("Content-Length", "2")
+                    self.end_headers()
+                    self.wfile.write(b"{}")
+                    return
                 self._reply({"ok": True})
 
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
@@ -427,6 +434,56 @@ def test_ntfy_sends_to_the_topic(push):
     cfg = notify.NotifyConfig(channel="ntfy", ntfy_topic=topic, ntfy_server=push.url)
     notify.send(cfg, "제목", "본문")
     assert push.requests[-1] == ("POST", "/", {"topic": topic, "title": "제목", "message": "본문"})
+
+
+LINK = "http://192.168.0.12:8765/#/signal/signal_20261113_102100_005930"
+
+
+def test_tapping_an_alert_opens_the_signal(push):
+    # ntfy: 알림을 누르면 열리는 주소와, 같은 주소의 버튼
+    ntfy = notify.NotifyConfig(channel="ntfy", ntfy_topic="t", ntfy_server=push.url)
+    notify.send(ntfy, "제목", "본문", LINK)
+    sent = push.requests[-1][2]
+    assert sent["click"] == LINK and sent["message"] == "본문"
+    assert sent["actions"] == [{"action": "view", "label": "신호 화면 열기", "url": LINK}]
+    notify.send(ntfy, "제목", "본문")                                  # 주소가 없으면 붙이지 않는다
+    assert "click" not in push.requests[-1][2]
+
+    # 텔레그램: 메시지 아래에 버튼
+    tg = notify.NotifyConfig(channel="telegram", telegram_token=TOKEN, telegram_chat="1",
+                             telegram_api=push.url)
+    notify.send(tg, "제목", "본문", LINK)
+    sent = push.requests[-1][2]
+    assert sent["reply_markup"] == {"inline_keyboard": [[{"text": "신호 화면 열기", "url": LINK}]]}
+    assert sent["text"] == "제목\n본문"
+    # 버튼 주소를 거절당하면 알림을 잃지 않고, 주소를 글로 붙여 다시 보낸다
+    push.reject_buttons = True
+    before = len(push.requests)
+    notify.send(tg, "제목", "본문", LINK)
+    first, second = push.requests[before:]
+    assert "reply_markup" in first[2] and "reply_markup" not in second[2]
+    assert second[2]["text"] == f"제목\n본문\n신호 화면 열기: {LINK}"
+
+
+def test_signal_link_exists_only_when_phones_can_reach_the_computer(workdir, monkeypatch):
+    monkeypatch.setattr("puddle_trader.ui.runtime.lan_addresses", lambda: ["192.168.0.12"])
+    app = UiApp()
+    assert app.signal_link("signal_1") is None       # 이 컴퓨터 전용일 때는 휴대폰이 열 수 없다
+    httpd = make_server(app, 0, phone=True)
+    try:
+        port = httpd.server_address[1]
+        assert app.signal_link("signal_20261113_102100_005930") == \
+            f"http://192.168.0.12:{port}/#/signal/signal_20261113_102100_005930"
+        assert app.signal_link("a/b c") == f"http://192.168.0.12:{port}/#/signal/a%2Fb%20c"
+        assert "code" not in app.signal_link("x")           # 접속 코드는 알림에 넣지 않는다
+        monkeypatch.setattr("puddle_trader.ui.runtime.lan_addresses", lambda: [])
+        assert app.signal_link("x") is None
+    finally:
+        httpd.server_close()
+    # 코드 입력 화면은 주소의 # 뒤(어느 신호인지)를 지우지 않는다
+    page = (Path(server_mod.__file__).parent / "static" / "login.html").read_text("utf-8")
+    assert "location.reload()" in page and '"/" + location.hash' in page
+    assert 'location.replace("/")' not in page
 
 
 def test_failures_are_readable_and_never_leak_the_token(push):
@@ -510,11 +567,21 @@ def test_alert_settings_are_saved_on_the_computer_only(served, push, monkeypatch
     assert api.post("/api/notify/test", headers=session)[1]["ok"] is True     # 시험 알림은 된다
 
 
+def sent_signal(app: UiApp) -> str:
+    conn = app.db()
+    try:
+        return conn.execute("SELECT id FROM signals ORDER BY detected_at LIMIT 1").fetchone()["id"]
+    finally:
+        conn.close()
+
+
 def test_demo_trade_sends_an_alert(workdir, push, monkeypatch):
     monkeypatch.setenv("TRADEBOT_NOTIFY", "ntfy")
     monkeypatch.setenv("TRADEBOT_NTFY_TOPIC", "puddle-test")
     monkeypatch.setenv("TRADEBOT_NTFY_SERVER", push.url)
+    monkeypatch.setattr("puddle_trader.ui.runtime.lan_addresses", lambda: ["192.168.0.12"])
     app = UiApp(demo=True, demo_lead_seconds=1.5)
+    app.phone_port = 8765                                   # 휴대폰 접속을 켠 것처럼
     app.start_watch()
     try:
         sent = wait_for(lambda: [r[2] for r in push.requests if r[0] == "POST"], timeout=20)
@@ -522,6 +589,7 @@ def test_demo_trade_sends_an_alert(workdir, push, monkeypatch):
         app.stop_watch()
         wait_for(lambda: app.watch_task.snapshot()["state"] != "running", timeout=10)
     assert sent[0]["topic"] == "puddle-test"
+    assert sent[0]["click"] == f"http://192.168.0.12:8765/#/signal/{sent_signal(app)}"
     assert sent[0]["title"] == "[데모] 신호 · 예시종목 A 연습 매수"
     assert "99,300원 × 3주" in sent[0]["message"] and "실제 주문 없음" in sent[0]["message"]
 
