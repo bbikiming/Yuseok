@@ -27,7 +27,7 @@ from ..db.database import connect
 from ..realtime.scanner import Scanner, SymbolSpec
 from ..strategy.detector import DetectorParams
 from . import service
-from .access import lan_addresses
+from .access import lan_addresses, outside_url
 
 DEMO_SYMBOLS = [("900001", "예시종목 A"), ("900002", "예시종목 B"), ("900003", "예시종목 C")]
 
@@ -286,13 +286,14 @@ class UiApp:
                 return
             task.set(message=f"종목 {len(specs)}개를 지켜보는 중")
             try:      # 알림은 뒤에서 나간다. 문구를 만들다 실패해도 감시는 계속한다
-                link = self.signal_link(obj.signal_id)        # 알림을 누르면 이 신호 화면이 열린다
+                links = self.signal_links(obj.signal_id)      # 알림을 누르면 이 신호 화면이 열린다
                 if kind == "entry":
-                    self.notifier.submit("entry", *service.entry_notice(cfg, obj, self.demo), link)
+                    self.notifier.submit("entry", *service.entry_notice(cfg, obj, self.demo),
+                                         links)
                 elif kind == "exit" and obj.symbol_id in by_id:
                     spec = by_id[obj.symbol_id]
                     self.notifier.submit("exit", *service.exit_notice(cfg, spec, obj, self.demo),
-                                         link)
+                                         links)
             except Exception:  # noqa: BLE001 - 알림 때문에 연습 매매가 멈추면 안 된다
                 pass
 
@@ -367,12 +368,16 @@ class UiApp:
 
         같은 와이파이에서만 열린다. 접속 코드는 넣지 않는다 (알림은 바깥 서비스를 거치므로).
         """
+        links = self.signal_links(signal_id)
+        return links[0] if links else None
+
+    def signal_links(self, signal_id: str) -> list[str]:
+        """알림에 붙일 주소들. 바깥 주소(VPN)를 등록했으면 그것이 먼저, 집 와이파이 주소가 다음."""
         if self.phone_port is None:
-            return None
-        ips = lan_addresses()
-        if not ips:
-            return None
-        return f"http://{ips[0]}:{self.phone_port}/#/signal/{quote(signal_id, safe='')}"
+            return []
+        tail = f"/#/signal/{quote(signal_id, safe='')}"
+        bases = [outside_url()] + [f"http://{ip}:{self.phone_port}" for ip in lan_addresses()[:1]]
+        return [base + tail for base in bases if base]
 
     def watchlist(self) -> list[dict[str, Any]]:
         """옆 패널의 관심종목: 이름·코드·지켜보는지·최신 가격과 등락률(감시 중일 때만)·보유 여부."""

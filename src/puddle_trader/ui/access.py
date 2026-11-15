@@ -22,6 +22,7 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 COOKIE = "pt_session"
 MAX_SESSIONS = 20
@@ -49,6 +50,84 @@ def is_private(ip: str) -> bool:
     return addr.is_loopback or addr.is_private or addr.is_link_local
 
 
+# ---- 집 밖에서 열기 (VPN) -------------------------------------------------------
+# 화면을 인터넷 전체에 열지 않는다. 대신 내 기기끼리만 통하는 VPN(예: Tailscale)의 주소를
+# '바깥 주소'로 등록해 두면, 그 주소로 온 요청을 받고 알림의 링크도 그 주소로 만든다.
+VPN_NET = ipaddress.ip_network("100.64.0.0/10")     # Tailscale 등이 기기에 나눠 주는 주소 대역
+OUTSIDE_ENV = "TRADEBOT_OUTSIDE_URL"
+
+
+def is_vpn(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip.split("%")[0])
+    except ValueError:
+        return False
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return addr.version == 4 and addr in VPN_NET
+
+
+def normalize_outside(url: str) -> str:
+    """사용자가 넣은 바깥 주소를 `http://이름:포트` 꼴로 다듬는다. 못 쓰는 모양이면 ValueError."""
+    url = url.strip()
+    if not url:
+        return ""
+    if "://" not in url:
+        url = "http://" + url
+    try:
+        parts = urlsplit(url)
+        host, port = parts.hostname or "", parts.port
+    except ValueError:
+        raise ValueError("주소 모양이 맞지 않아요 (예: http://100.101.102.103:8765)") from None
+    if (parts.scheme not in ("http", "https") or not host or parts.username or parts.password
+            or parts.path not in ("", "/") or parts.query or parts.fragment or len(url) > 200
+            or not all(c.isalnum() or c in ".-:" for c in host)):
+        raise ValueError("주소 모양이 맞지 않아요 (예: http://100.101.102.103:8765)")
+    if host in ("localhost", "127.0.0.1", "::1"):
+        raise ValueError("그 주소는 이 컴퓨터 자신이에요. 휴대폰에서 닿는 주소를 넣어 주세요")
+    shown = f"[{host}]" if ":" in host else host
+    return f"{parts.scheme}://{shown}" + (f":{port}" if port else "")
+
+
+def outside_url() -> str:
+    """등록해 둔 바깥 주소 (없으면 빈 문자열)."""
+    try:
+        return normalize_outside(os.environ.get(OUTSIDE_ENV, ""))
+    except ValueError:
+        return ""
+
+
+def outside_is_public(url: str) -> bool:
+    """VPN·내부 주소가 아니라 인터넷 어디서나 닿는 주소로 보이는가 (화면에서 경고하려고)."""
+    host = urlsplit(url).hostname or ""
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return not host.endswith((".ts.net", ".local", ".lan", ".home.arpa"))
+    return not (is_vpn(host) or is_private(host))
+
+
+def vpn_address() -> str:
+    """이 컴퓨터의 VPN(Tailscale 등) 주소. VPN 이 꺼져 있거나 없으면 빈 문자열.
+
+    VPN 대역으로 '나갈 때 쓰는 주소'를 운영체제에 물어보는 방식이라 따로 프로그램을 실행하지 않는다.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("100.100.100.100", 9))
+            ip = s.getsockname()[0]
+    except OSError:
+        return ""
+    return ip if is_vpn(ip) else ""
+
+
+def client_allowed(ip: str, outside: bool) -> bool:
+    """받아 줄 기기인가: 집 안 주소는 항상, VPN 주소는 바깥 주소를 등록했을 때만."""
+    return is_private(ip) or (outside and is_vpn(ip))
+
+
 def host_name(header: str) -> str:
     """Host 헤더에서 포트를 떼어 낸 이름 (IPv6 는 [::1]:8765 모양)."""
     host = (header or "").strip().lower()
@@ -57,7 +136,7 @@ def host_name(header: str) -> str:
     return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
 
 
-def host_allowed(header: str, phone: bool) -> bool:
+def host_allowed(header: str, phone: bool, outside: str = "") -> bool:
     """DNS 리바인딩 차단: 주소창에 적힌 이름이 이 컴퓨터를 가리키는 것만 받는다.
 
     리바인딩은 공격자의 '도메인 이름'으로 접속하게 만드는 수법이라, 숫자 주소(사설망)와
@@ -68,6 +147,8 @@ def host_allowed(header: str, phone: bool) -> bool:
         return True
     if not phone:
         return False
+    if outside and host == (urlsplit(outside).hostname or "").lower():
+        return True          # 사용자가 등록한 바깥 주소의 이름
     try:
         ipaddress.ip_address(host)
     except ValueError:

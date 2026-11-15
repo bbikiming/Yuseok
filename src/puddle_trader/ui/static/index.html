@@ -207,6 +207,8 @@ ul.srows a.r:hover{background:var(--fill-weak);text-decoration:none}
 ul.srows .l{min-width:0;display:flex;flex-direction:column}ul.srows .l b{font-size:15px;color:var(--ink)}
 ul.srows .v{flex:none;display:flex;flex-direction:column;align-items:flex-end;font-size:15px}
 ul.srows .s{font-size:13px;color:var(--sub)}ul.srows .s.up{color:var(--up)}ul.srows .s.down{color:var(--down)}
+.outside{display:flex;flex-direction:column;gap:14px;padding-top:16px;border-top:1px solid var(--line)}
+.outside h3{margin:0;font-size:17px;font-weight:700;color:var(--ink)}
 label.check{display:inline-flex;align-items:center;gap:8px;min-height:44px;font-size:15px;cursor:pointer}
 label.check input{width:20px;height:20px;min-height:0;padding:0;accent-color:var(--blue)}
 .qr{flex:none;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
@@ -743,7 +745,8 @@ async function viewSettings() {
   const notifyCard = `<section class="card"><div class="between"><h2>휴대폰 알림</h2>${ntState}</div>
 ${ntGuide}${ntTopic}${ntLast}
 ${nt.channel && !status.remote ? `<p class="small sub">${status.phone && status.phone.enabled
-    ? "알림을 누르면 그 신호 화면이 바로 열려요 (휴대폰이 같은 와이파이에 있을 때)."
+    ? (status.phone.outside && status.phone.outside.url ? "알림을 누르면 그 신호 화면이 바로 열려요. 집 밖에서도 열립니다 (휴대폰의 VPN 이 켜져 있을 때)."
+      : "알림을 누르면 그 신호 화면이 바로 열려요 (휴대폰이 같은 와이파이에 있을 때). 집 밖에서도 열리게 하려면 아래 '휴대폰으로 열기'의 안내를 따라 주세요.")
     : "알림을 눌러 그 신호 화면이 열리게 하려면 <b>tradebot ui --phone</b> 으로 켜 주세요. 지금은 알림에 주소가 붙지 않아요."}</p>` : ""}
 ${status.remote ? `<p class="note">알림 설정은 컴퓨터에서만 바꿀 수 있어요.</p>
 ${nt.ready ? `<div class="btns"><button type="button" class="btn primary" data-act="notify-test">시험 알림 보내기</button></div>` : ""}`
@@ -778,6 +781,20 @@ ${nt.channel === "ntfy" ? `<button type="button" class="btn" data-act="notify-ne
       ["'홈 화면에 추가'를 누르고 '추가'를 누릅니다.", "휴대폰에 따라 주소창이 있는 화면으로 열릴 수 있어요."],
     ]).map(([t, d], i) => `<li><span class="n">${i + 1}</span><span><b>${t}</b>${d ? ` <span class="sub">${d}</span>` : ""}</span></li>`).join("")}</ol>
 <p class="note small">컴퓨터에서 프로그램이 켜져 있고 같은 와이파이일 때만 열립니다. 밖(이동통신)에서는 열리지 않아요.</p></section>`;
+  const out = ph && ph.outside;
+  const outsideBox = !out ? "" : `<div class="outside"><h3>집 밖에서도 열기</h3>
+<p class="sub" style="font-size:15px">밖에서 알림을 눌러 화면을 열려면, 휴대폰이 집 컴퓨터에 닿는 길이 있어야 해요. 이 화면을 인터넷에 그대로 여는 대신, <b>내 기기끼리만 통하는 VPN</b>(예: Tailscale)을 쓰는 방법을 권합니다.</p>
+${step([
+    ["컴퓨터와 휴대폰에 Tailscale 을 설치하고 같은 계정으로 로그인합니다.", "무료로 쓸 수 있어요. 휴대폰에서는 VPN 을 켜 둡니다."],
+    ["아래 칸에 이 컴퓨터의 VPN 주소를 넣고 저장합니다.", out.suggest ? "찾은 주소를 채워 두었어요." : "Tailscale 을 켜면 '100.' 으로 시작하는 주소가 나와요."],
+    ["집에서 한 번, 아래 QR 을 휴대폰으로 찍어 들어와 둡니다.", "밖에서는 접속 코드를 볼 수 없으니 미리 들어와 두는 거예요. 30일 동안 기억합니다."]])}
+<form class="fields" data-form="outside"><label class="f" style="flex:3 1 280px">바깥 주소 (VPN 주소)<span class="h">예: http://100.101.102.103:8765 · 비우고 저장하면 끕니다</span>
+<input name="url" inputmode="url" autocomplete="off" maxlength="200" value="${esc(out.url || out.suggest)}" placeholder="http://100.x.x.x:8765"></label>
+<div class="btns" style="flex:1 1 100%"><button class="btn primary">저장</button>${out.url ? `<span class="chip pass" style="align-self:center">쓰는 중</span>` : ""}</div></form>
+${out.url && out.public ? `<p class="note warn">이 주소는 VPN 주소가 아니라 인터넷 어디서나 닿는 주소로 보여요. 그렇다면 누구나 접속 코드 화면까지 올 수 있습니다. 공유기 포트를 열었거나 공개 터널을 쓴 것이라면 끄는 것을 권해요.</p>` : ""}
+${out.qr ? `<div class="stats"><div class="qr">${qrSvg(out.qr)}<span class="small sub">밖에서 쓸 주소로<br>들어오는 QR</span></div>
+<div class="stat" style="flex:2 1 240px"><div>바깥 주소</div><div class="num" style="font-size:18px;overflow-wrap:anywhere">${esc(out.url)}</div>
+<p class="small sub" style="margin-top:8px">휴대폰의 VPN 을 켠 상태에서 찍으세요. 이제 알림을 누르면 이 주소로 열리고, 집 와이파이 주소는 두 번째 버튼으로 붙습니다.</p></div></div>` : ""}</div>`;
   const phoneCard = status.remote ? "" : `<section class="card"><div class="between"><h2>휴대폰으로 열기</h2>
 ${ph && ph.enabled ? `<span class="chip pass">켜짐</span>` : `<span class="chip">꺼짐</span>`}</div>
 ${ph && ph.enabled ? `<p class="sub" style="font-size:15px">휴대폰을 이 컴퓨터와 같은 와이파이에 연결한 뒤, ${ph.qr ? "카메라로 QR 코드를 찍거나 " : ""}휴대폰 브라우저 주소창에 아래 주소를 넣고 접속 코드를 입력하세요.</p>
@@ -787,6 +804,7 @@ ${ph && ph.enabled ? `<p class="sub" style="font-size:15px">휴대폰을 이 컴
 ${ph.name_url ? `<p class="small sub num">공유기가 주소를 바꿔 위 주소가 안 열리면 <b>${esc(ph.name_url)}</b> 도 써 보세요. 홈 화면에 추가할 때는 이 주소가 더 오래 갑니다.</p>` : ""}
 <div class="between" style="align-items:center"><span class="small sub">휴대폰에서 연 뒤 설정에 들어가면 <b>홈 화면에 앱처럼 추가</b>하는 방법이 나와요. 지금 기억하고 있는 기기: <b class="num">${ph.devices}대</b></span>
 <button type="button" class="btn small" data-act="phone-revoke" ${ph.devices ? "" : "disabled"}>기억한 기기 모두 끊기</button></div>
+${outsideBox}
 <p class="note small">통신이 암호화되지 않아요. 집처럼 믿을 수 있는 와이파이에서만 쓰고, 카페·공용 와이파이에서는 켜지 마세요. 코드는 프로그램을 다시 켤 때마다 바뀌지만, 한 번 들어온 휴대폰은 30일 동안 다시 묻지 않아요. 키(Client ID·Secret)는 휴대폰에서 넣을 수 없어요.</p>`
     : `<p class="sub" style="font-size:15px">지금은 이 컴퓨터에서만 열립니다. 휴대폰에서도 보려면 프로그램을 끄고(Ctrl-C) 터미널에서 아래처럼 다시 켜 주세요.</p>
 <p class="note num"><b>tradebot ui --phone</b></p>
@@ -868,6 +886,7 @@ document.addEventListener("submit", (ev) => {
   if (kind === "fav-add") act(() => api("/api/favorites/add", d), "추가했어요");
   else if (kind === "notify") act(() => api("/api/notify/save", {channel: d.channel, telegram_token: d.telegram_token,
     on_entry: form.elements.on_entry.checked, on_exit: form.elements.on_exit.checked}), "저장했어요");
+  else if (kind === "outside") act(() => api("/api/phone/outside", {url: d.url}), d.url.trim() ? "바깥 주소를 저장했어요" : "바깥 주소를 껐어요");
   else if (kind === "creds") act(async () => { const r = await api("/api/credentials", d); toast(r.message); });
   else if (kind === "settings") act(() => api("/api/settings", {
     order_amount: d.order_amount, max_hold_minutes: d.max_hold_minutes, max_daily_entries: d.max_daily_entries,

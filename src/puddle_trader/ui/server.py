@@ -22,18 +22,27 @@ from ..config import AppConfig, save_credentials, save_env_values, save_local_ov
 from . import qr, service
 from .access import (
     COOKIE,
+    OUTSIDE_ENV,
     SESSION_SECONDS,
     Access,
+    client_allowed,
     host_allowed,
     is_loopback,
-    is_private,
     lan_addresses,
     local_name,
+    normalize_outside,
+    outside_is_public,
+    outside_url,
+    vpn_address,
 )
 from .runtime import UiApp, has_keys
 
 STATIC = Path(__file__).with_name("static")
 MAX_BODY = 64 * 1024
+# 앞에 터널·프록시가 서 있다는 표시. 이런 요청은 이 컴퓨터에서 온 것처럼 보여도 믿지 않는다
+PROXY_HEADERS = ("X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP",
+                 "Forwarded", "Via", "CF-Connecting-IP", "CF-Ray", "Tailscale-User-Login",
+                 "Ngrok-Agent-Ips", "X-Original-Forwarded-For")
 # 홈 화면에 추가할 때 휴대폰이 받아 가는 파일들. 민감한 내용이 없어서 접속 코드 없이도 준다
 PUBLIC_FILES = {
     "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json; charset=utf-8"),
@@ -138,14 +147,21 @@ class Handler(BaseHTTPRequestHandler):
                    "application/json; charset=utf-8", headers)
 
     def _host_ok(self) -> bool:
-        return host_allowed(self.headers.get("Host") or "", self.access.phone)
+        return host_allowed(self.headers.get("Host") or "", self.access.phone, outside_url())
 
     def _client(self) -> str:
         return str(self.client_address[0])
 
     def _remote(self) -> bool:
-        """다른 기기(휴대폰)에서 온 요청인가."""
-        return self.force_remote or not is_loopback(self._client())
+        """다른 기기(휴대폰)에서 온 요청인가.
+
+        같은 컴퓨터의 터널·프록시 프로그램이 바깥 요청을 대신 전달하면 주소는 127.0.0.1 로 보인다.
+        그런 요청을 '이 컴퓨터의 주인'으로 믿으면 접속 코드 없이 다 열리므로, 전달 흔적이 있으면
+        다른 기기로 다룬다.
+        """
+        if self.force_remote or not is_loopback(self._client()):
+            return True
+        return any(self.headers.get(name) for name in PROXY_HEADERS)
 
     def _session(self) -> str | None:
         try:
@@ -162,14 +178,21 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         if not self.access.phone:
             return {"enabled": False, "urls": [], "code": "", "qr": None, "name_url": "",
-                    "devices": 0}
+                    "devices": 0, "outside": None}
+        out = outside_url()
+        vpn = vpn_address()
+        outside = {      # 집 밖에서 여는 주소 (VPN). QR 은 그 주소로 한 번 들어와 두기 위한 것
+            "url": out, "public": outside_is_public(out) if out else False,
+            "suggest": f"http://{vpn}:{port}" if vpn else "",
+            "qr": list(qr.matrix(f"{out}/?code={self.access.code}")) if out else None,
+        }
         urls = [f"http://{ip}:{port}" for ip in lan_addresses()]
         name = local_name()
         # 카메라로 찍으면 주소와 접속 코드가 한 번에 들어가는 QR (첫 번째 주소 기준)
         rows = list(qr.matrix(f"{urls[0]}/?code={self.access.code}")) if urls else None
         return {"enabled": True, "code": self.access.code, "urls": urls, "qr": rows,
                 "name_url": f"http://{name}:{port}" if name else "",
-                "devices": self.access.count()}
+                "devices": self.access.count(), "outside": outside}
 
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -188,7 +211,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not self._host_ok():
                 raise ApiError(403, "이 컴퓨터에서만 열 수 있어요")
-            if self._remote() and not (self.access.phone and is_private(self._client())):
+            if self._remote() and not (self.access.phone
+                                       and client_allowed(self._client(), bool(outside_url()))):
                 raise ApiError(403, "이 컴퓨터에서만 열 수 있어요")
             fn()
         except ApiError as exc:
@@ -328,6 +352,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self._save_notify(body))
         if url.path == "/api/notify/test":
             return self._json(self._test_notify())
+        if url.path == "/api/phone/outside":
+            if self._remote():
+                raise ApiError(403, "컴퓨터에서만 바꿀 수 있어요")
+            if not self.access.phone:
+                raise ApiError(400, "먼저 tradebot ui --phone 으로 켜 주세요")
+            save_env_values({OUTSIDE_ENV: normalize_outside(str(body.get("url", "")))})
+            return self._json({"outside": self._phone_info()["outside"]})
         if url.path == "/api/phone/revoke":
             if self._remote():
                 raise ApiError(403, "컴퓨터에서만 할 수 있어요")

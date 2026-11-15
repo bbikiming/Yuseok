@@ -111,36 +111,48 @@ def find_telegram_chat(cfg: NotifyConfig) -> str:
 
 
 LINK_LABEL = "신호 화면 열기"
+HOME_LABEL = "집 와이파이로 열기"
 
 
-def send(cfg: NotifyConfig, title: str, body: str, link: str | None = None) -> None:
+def _links(link: str | list[str] | None) -> list[tuple[str, str]]:
+    """(버튼 글자, 주소) 목록. 첫 번째가 알림을 눌렀을 때 열리는 주소다."""
+    urls = [link] if isinstance(link, str) else list(link or [])
+    return list(zip((LINK_LABEL, HOME_LABEL), urls[:2], strict=False))
+
+
+def send(cfg: NotifyConfig, title: str, body: str,
+         link: str | list[str] | None = None) -> None:
     """지금 바로 한 번 보낸다. 실패하면 NotifyError.
 
-    link 를 주면 알림을 눌렀을 때 그 주소(신호 화면)가 열리게 한다.
+    link 를 주면 알림을 눌렀을 때 그 주소(신호 화면)가 열리게 한다. 둘을 주면 두 번째는
+    '집 와이파이로 열기' 버튼이 된다 (바깥 주소가 안 될 때를 위해).
     """
+    links = _links(link)
     if cfg.channel == "telegram":
         if not cfg.ready:
             raise NotifyError("텔레그램 설정이 아직 끝나지 않았어요")
         url = f"{cfg.telegram_api}/bot{cfg.telegram_token}/sendMessage"
         message = {"chat_id": cfg.telegram_chat, "text": f"{title}\n{body}",
                    "disable_web_page_preview": True}
-        if link is None:
+        if not links:
             _request("POST", url, json=message, telegram=True)
             return
-        button = {"inline_keyboard": [[{"text": LINK_LABEL, "url": link}]]}
+        buttons = {"inline_keyboard": [[{"text": label, "url": u}] for label, u in links]}
         try:
-            _request("POST", url, json={**message, "reply_markup": button}, telegram=True)
+            _request("POST", url, json={**message, "reply_markup": buttons}, telegram=True)
         except NotifyRejected:
             # 텔레그램이 버튼 주소(집 안 주소)를 받아 주지 않으면, 주소를 글로 붙여 다시 보낸다
-            plain = {**message, "text": f"{title}\n{body}\n{LINK_LABEL}: {link}"}
-            _request("POST", url, json=plain, telegram=True)
+            lines = "".join(f"\n{label}: {u}" for label, u in links)
+            _request("POST", url, json={**message, "text": f"{title}\n{body}{lines}"},
+                     telegram=True)
     elif cfg.channel == "ntfy":
         if not cfg.ready:
             raise NotifyError("ntfy 주제 이름이 아직 없어요")
         message = {"topic": cfg.ntfy_topic, "title": title, "message": body}
-        if link is not None:
-            message["click"] = link          # 알림을 누르면 열리는 주소
-            message["actions"] = [{"action": "view", "label": LINK_LABEL, "url": link}]
+        if links:
+            message["click"] = links[0][1]   # 알림을 누르면 열리는 주소
+            message["actions"] = [{"action": "view", "label": label, "url": u}
+                                  for label, u in links]
         _request("POST", cfg.ntfy_server.rstrip("/") + "/", json=message)
     else:
         raise NotifyError("알림이 꺼져 있어요")
@@ -183,7 +195,7 @@ class Notifier:
     def __init__(self, config_fn: Callable[[], NotifyConfig] = NotifyConfig.from_env,
                  min_interval: float = 1.0):
         self._config_fn = config_fn
-        self._queue: queue.Queue[tuple[str, str, str | None]] = queue.Queue(maxsize=50)
+        self._queue: queue.Queue[tuple[str, str, Any]] = queue.Queue(maxsize=50)
         self._min_interval = min_interval
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -192,7 +204,8 @@ class Notifier:
     def config(self) -> NotifyConfig:
         return self._config_fn()
 
-    def submit(self, kind: str, title: str, body: str, link: str | None = None) -> bool:
+    def submit(self, kind: str, title: str, body: str,
+               link: str | list[str] | None = None) -> bool:
         """kind: entry / exit. 설정에서 꺼 둔 종류이거나 알림이 꺼져 있으면 보내지 않는다."""
         cfg = self.config()
         if not cfg.ready or (kind == "entry" and not cfg.on_entry) \

@@ -41,7 +41,7 @@ def workdir(tmp_path, monkeypatch):
     for key in ("TOSS_CLIENT_ID", "TOSS_CLIENT_SECRET", "TOSS_ACCOUNT_SEQ", "TRADEBOT_NOTIFY",
                 "TRADEBOT_TELEGRAM_TOKEN", "TRADEBOT_TELEGRAM_CHAT", "TRADEBOT_TELEGRAM_API",
                 "TRADEBOT_NTFY_TOPIC", "TRADEBOT_NTFY_SERVER", "TRADEBOT_NOTIFY_ENTRY",
-                "TRADEBOT_NOTIFY_EXIT"):
+                "TRADEBOT_NOTIFY_EXIT", "TRADEBOT_OUTSIDE_URL"):
         monkeypatch.setenv(key, "x")      # 테스트가 끝나면 원래 값으로 되돌리기 위해 등록
         monkeypatch.delenv(key)
     return tmp_path
@@ -465,6 +465,119 @@ def test_tapping_an_alert_opens_the_signal(push):
     assert second[2]["text"] == f"제목\n본문\n신호 화면 열기: {LINK}"
 
 
+# ---- 집 밖에서 열기 (VPN 주소) ---------------------------------------------------
+VPN_URL = "http://100.101.102.103:8765"
+
+
+def test_outside_address_is_checked_before_it_is_stored():
+    ok = access.normalize_outside
+    assert ok(" 100.101.102.103:8765 ") == VPN_URL                  # http:// 를 빼먹어도 된다
+    assert ok("http://my-mac.tail1234.ts.net:8765/") == "http://my-mac.tail1234.ts.net:8765"
+    assert ok("https://my-mac.tail1234.ts.net") == "https://my-mac.tail1234.ts.net"
+    assert ok("") == ""
+    for bad in ("ftp://100.101.102.103", "http://user:pw@100.101.102.103", "http://localhost:8765",
+                "http://100.101.102.103:8765/admin", "http://100.101.102.103/?a=1",
+                "http://127.0.0.1:8765", "http://bad host", "http://a:b:c", "x" * 300):
+        with pytest.raises(ValueError):
+            ok(bad)
+    assert access.is_vpn("100.64.0.1") and access.is_vpn("100.127.255.254")
+    assert not access.is_vpn("100.128.0.1") and not access.is_vpn("192.168.0.9")
+    # 인터넷 어디서나 닿는 주소로 보이면 화면에서 경고한다
+    assert access.outside_is_public("https://my-ui.example.com")
+    assert access.outside_is_public("http://8.8.8.8:8765")
+    assert not access.outside_is_public(VPN_URL)
+    assert not access.outside_is_public("http://my-mac.tail1234.ts.net:8765")
+
+
+def test_vpn_devices_are_accepted_only_after_an_outside_address_is_set(monkeypatch):
+    assert access.client_allowed("192.168.0.9", outside=False)
+    assert not access.client_allowed("100.101.102.50", outside=False)     # 등록 전에는 받지 않는다
+    assert access.client_allowed("100.101.102.50", outside=True)
+    assert not access.client_allowed("8.8.8.8", outside=True)        # 공인 주소는 끝까지 안 받는다
+    # 주소창 이름: 등록한 바깥 주소만 추가로 허용된다
+    assert not access.host_allowed("100.101.102.103:8765", phone=True)
+    assert access.host_allowed("100.101.102.103:8765", phone=True, outside=VPN_URL)
+    name = "http://my-mac.tail1234.ts.net:8765"
+    assert access.host_allowed("my-mac.tail1234.ts.net:8765", phone=True, outside=name)
+    assert not access.host_allowed("evil.ts.net:8765", phone=True, outside=name)
+    assert not access.host_allowed("my-mac.tail1234.ts.net:8765", phone=False, outside=name)
+
+
+def test_outside_address_can_be_set_from_the_computer_only(served_phone, monkeypatch):
+    app, api, handler = served_phone
+    monkeypatch.setattr("puddle_trader.ui.server.vpn_address", lambda: "100.101.102.103")
+    monkeypatch.setattr("puddle_trader.ui.server.lan_addresses", lambda: ["192.168.0.12"])
+    monkeypatch.setattr("puddle_trader.ui.runtime.lan_addresses", lambda: ["192.168.0.12"])
+    port = api.port
+    api.post("/api/login", {"code": handler.access.code})
+    session = {"Cookie": api.headers["Set-Cookie"].split(";")[0]}
+    assert api.post("/api/phone/outside", {"url": VPN_URL}, headers=session)[0] == 403
+
+    handler.force_remote = False
+    info = api.get("/api/status")[1]["phone"]["outside"]
+    assert info == {"url": "", "public": False, "qr": None,
+                    "suggest": f"http://100.101.102.103:{port}"}     # VPN 주소를 찾아 제안한다
+    assert app.signal_links("s1") == [f"http://192.168.0.12:{port}/#/signal/s1"]
+    assert api.post("/api/phone/outside", {"url": "http://localhost:1"})[0] == 400
+
+    status, body = api.post("/api/phone/outside", {"url": "100.101.102.103:8765"})
+    assert status == 200 and body["outside"]["url"] == VPN_URL and not body["outside"]["public"]
+    assert tuple(body["outside"]["qr"]) == qr.matrix(f"{VPN_URL}/?code={handler.access.code}")
+    assert "TRADEBOT_OUTSIDE_URL=http://100.101.102.103:8765" in Path(".env").read_text("utf-8")
+    # 알림 링크: 바깥 주소가 먼저, 집 와이파이 주소가 그다음
+    assert app.signal_links("s1") == [f"{VPN_URL}/#/signal/s1",
+                                      f"http://192.168.0.12:{port}/#/signal/s1"]
+    assert app.signal_link("s1") == f"{VPN_URL}/#/signal/s1"
+    # 등록한 주소의 이름으로 온 요청을 받는다 (등록 전에는 403 이었다)
+    handler.force_remote = True
+    assert api.get("/api/status", headers={**session, "Host": "100.101.102.103:8765"})[0] == 200
+    # 지우면 원래대로
+    handler.force_remote = False
+    assert api.post("/api/phone/outside", {"url": ""})[1]["outside"]["url"] == ""
+    handler.force_remote = True
+    assert api.get("/api/status", headers={**session, "Host": "100.101.102.103:8765"})[0] == 403
+
+
+def test_requests_relayed_by_a_tunnel_are_not_trusted_as_the_computer(served_phone):
+    _app, api, handler = served_phone
+    handler.force_remote = False
+    assert api.get("/api/status")[0] == 200                           # 이 컴퓨터의 브라우저
+    # 같은 컴퓨터의 터널·프록시가 전달한 요청: 주소는 127.0.0.1 이지만 접속 코드가 필요하다
+    for header in ("X-Forwarded-For", "CF-Connecting-IP", "Forwarded", "Via"):
+        relayed = {header: "203.0.113.7"}
+        assert api.get("/api/status", headers=relayed)[0] == 401
+        assert "접속 코드를 넣어 주세요" in api.get("/", headers=relayed)[1].decode()
+        assert api.post("/api/credentials", {"client_id": "a", "client_secret": "b"},
+                        headers=relayed)[0] == 401
+    relayed = {"X-Forwarded-For": "203.0.113.7"}
+    api.post("/api/login", {"code": handler.access.code}, headers=relayed)
+    session = {"Cookie": api.headers["Set-Cookie"].split(";")[0], **relayed}
+    body = api.get("/api/status", headers=session)[1]
+    assert body["remote"] is True and body["phone"] is None           # 코드를 넣어도 '다른 기기'다
+    assert api.post("/api/credentials", {"client_id": "a", "client_secret": "b"},
+                    headers=session)[0] == 403
+
+
+def test_alerts_carry_both_addresses(push):
+    links = [f"{VPN_URL}/#/signal/s1", "http://192.168.0.12:8765/#/signal/s1"]
+    ntfy = notify.NotifyConfig(channel="ntfy", ntfy_topic="t", ntfy_server=push.url)
+    notify.send(ntfy, "제목", "본문", links)
+    sent = push.requests[-1][2]
+    assert sent["click"] == links[0]
+    assert [(a["label"], a["url"]) for a in sent["actions"]] == [
+        ("신호 화면 열기", links[0]), ("집 와이파이로 열기", links[1])]
+    tg = notify.NotifyConfig(channel="telegram", telegram_token=TOKEN, telegram_chat="1",
+                             telegram_api=push.url)
+    notify.send(tg, "제목", "본문", links)
+    rows = push.requests[-1][2]["reply_markup"]["inline_keyboard"]
+    assert [(r[0]["text"], r[0]["url"]) for r in rows] == [
+        ("신호 화면 열기", links[0]), ("집 와이파이로 열기", links[1])]
+    push.reject_buttons = True
+    notify.send(tg, "제목", "본문", links)
+    assert push.requests[-1][2]["text"] == (
+        f"제목\n본문\n신호 화면 열기: {links[0]}\n집 와이파이로 열기: {links[1]}")
+
+
 def test_signal_link_exists_only_when_phones_can_reach_the_computer(workdir, monkeypatch):
     monkeypatch.setattr("puddle_trader.ui.runtime.lan_addresses", lambda: ["192.168.0.12"])
     app = UiApp()
@@ -810,7 +923,9 @@ def test_only_the_computer_can_forget_phones(served_phone):
 def test_other_devices_are_refused_unless_phone_access_is_on(served):
     _app, api = served
     assert api.get("/api/status")[1]["phone"] == {
-        "enabled": False, "urls": [], "code": "", "qr": None, "name_url": "", "devices": 0}
+        "enabled": False, "urls": [], "code": "", "qr": None, "name_url": "", "devices": 0,
+        "outside": None}
+    assert api.post("/api/phone/outside", {"url": "http://100.101.102.103:8765"})[0] == 400
     assert api.post("/api/phone/revoke")[1] == {"revoked": 0}
     api.handler.force_remote = True          # 127.0.0.1 로만 듣지만, 그래도 한 번 더 막는다
     assert api.get("/")[0] == 403 and api.get("/api/status")[0] == 403
