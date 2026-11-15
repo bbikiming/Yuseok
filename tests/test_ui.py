@@ -353,6 +353,30 @@ def test_trade_left_open_by_a_stopped_program_is_marked_unconfirmed(served):
     assert api.get("/api/status")[1]["positions"] == []
 
 
+def test_side_panel_data_watchlist_and_todays_total(served, monkeypatch):
+    app, api = served
+    body = api.get("/api/status")[1]
+    # 감시 중이 아니면 가격은 비어 있고, 꺼 둔 종목은 꺼진 것으로 나온다
+    favorites.add("KR", "069500", "KODEX 200")
+    favorites.set_enabled("KR", "069500", False)
+    body = api.get("/api/status")[1]
+    by_code = {w["code"]: w for w in body["watchlist"]}
+    assert by_code["005930"] == {"symbol_id": "KR:005930", "market": "KR", "code": "005930",
+                                 "name": "삼성전자", "enabled": True, "last": None,
+                                 "holding": False}
+    assert by_code["069500"]["enabled"] is False
+    assert body["today"] == {"closed": 0, "net": 0, "trades": []}
+
+    # 오늘 끝난 매매만 합계에 들어간다 (어제 것은 빠진다)
+    today = datetime(2026, 11, 13, 10, 21, tzinfo=KST)
+    seed_trade(app, signal_id="old", entry_at=today - timedelta(days=1))
+    seed_trade(app, signal_id="new", entry_at=today)
+    monkeypatch.setattr(app, "now_fn", lambda: today + timedelta(hours=1))
+    body = api.get("/api/status")[1]
+    assert (body["today"]["closed"], body["today"]["net"]) == (1, -2481)
+    assert [t["signal_id"] for t in body["today"]["trades"]] == ["new"]
+
+
 def test_today_events_read_like_a_timeline(workdir):
     app = UiApp()
     seed_trade(app, entry_at=datetime(2026, 11, 13, 10, 21, tzinfo=KST))
@@ -393,6 +417,11 @@ def test_demo_buys_in_practice_without_keys(workdir):
         assert status["demo"] is True and status["in_session"] is True
         assert status["counts"] == {"symbols": 3, "signals_today": 1, "open": 1}
         assert any("연습으로 샀어요" in e["text"] for e in status["events"])
+        # 옆 패널: 데모 종목 3개의 가격이 보이고, 산 종목은 보유 중으로 표시된다
+        watch = {w["name"]: w for w in status["watchlist"]}
+        assert set(watch) == {"예시종목 A", "예시종목 B", "예시종목 C"}
+        assert watch["예시종목 A"]["holding"] is True and watch["예시종목 A"]["last"] == pos["last"]
+        assert watch["예시종목 C"]["holding"] is False and watch["예시종목 C"]["last"] == 100_000
         assert [s["status"] for s in status["journey"]][:4] == ["done", "done", "done", "current"]
         conn = app.db()
         detail = service.signal_detail(conn, AppConfig.load(), pos["signal_id"])

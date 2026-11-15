@@ -287,6 +287,27 @@ class UiApp:
                 out[pos.signal_id] = last
         return out
 
+    def watchlist(self) -> list[dict[str, Any]]:
+        """옆 패널의 관심종목: 이름·코드·지켜보는지·최신 가격(감시 중일 때만 있다)·보유 여부."""
+        if self.demo:
+            items = [{"market": "KR", "code": code, "name": name, "enabled": True}
+                     for code, name in DEMO_SYMBOLS]
+        else:
+            items = favorites.load()["symbols"]
+        scanner = self._scanner
+        held = set(dict(scanner.positions)) if scanner is not None else set()
+        out = []
+        for x in items:
+            sid = repo.symbol_id(str(x.get("market", "KR")), str(x["code"]))
+            out.append({
+                "symbol_id": sid, "market": x.get("market", "KR"), "code": str(x["code"]),
+                "name": x.get("name") or str(x["code"]),
+                "enabled": x.get("enabled", True) is not False,
+                "last": scanner.tape.last(sid) if scanner is not None else None,
+                "holding": sid in held,
+            })
+        return out
+
     def in_session(self) -> bool:
         cfg = AppConfig.load()
         ses = engine.SessionParams.from_config(cfg.strategy)

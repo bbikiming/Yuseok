@@ -54,8 +54,10 @@ def build_status(app: UiApp) -> dict[str, Any]:
         cover = service.coverage(conn)
         paper = service.paper_stats(conn, cfg)
         events = service.today_events(conn, cfg, now.date())
-        signals_today = sum(1 for t in hist["trades"]
-                            if t["entry_time"][:10] == now.date().isoformat())
+        day = now.date().isoformat()
+        todays = [t for t in hist["trades"] if t["entry_time"][:10] == day]
+        signals_today = len(todays)
+        closed_today = [t for t in todays if not t["open"]]
     finally:
         conn.close()
     auth = state.get("auth") or {}
@@ -69,6 +71,10 @@ def build_status(app: UiApp) -> dict[str, Any]:
         "watch": watching,
         "counts": {"symbols": n_symbols, "signals_today": signals_today, "open": len(positions)},
         "positions": positions,
+        "today": {"closed": len(closed_today),
+                  "net": sum(t["amounts"]["net"] for t in closed_today),
+                  "trades": closed_today[:10]},
+        "watchlist": app.watchlist(),
         "journey": service.journey(connected=bool(auth.get("ok")), has_keys=has_keys(),
                                    cover_days=cover["days"], verdict=verdict, paper=paper,
                                    demo=app.demo),
