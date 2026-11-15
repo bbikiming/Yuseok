@@ -10,6 +10,7 @@ import sqlite3
 from datetime import date, datetime
 from typing import Any
 
+from .. import notify
 from ..backtest import metrics
 from ..config import AppConfig
 from ..costs import CostModel, ceil_to_tick, floor_to_tick
@@ -88,6 +89,35 @@ RESULT_TEXT = {
     "TIMEOUT": "시간이 다 돼서 팔았어요",
     "WEAK_WIN": "시간이 다 돼서 팔았어요",
 }
+
+
+# ---- 휴대폰 알림 --------------------------------------------------------------
+def entry_notice(cfg: AppConfig, pos: Any, demo: bool = False) -> tuple[str, str]:
+    """연습으로 샀을 때 보낼 알림 (제목, 본문). pos 는 스캐너의 Position."""
+    name = pos.spec.name or pos.spec.code
+    return notify.entry_message(name, pos.entry_price, quantity(cfg, pos.entry_price),
+                                pos.tp, pos.sl, pos.deadline, demo)
+
+
+def exit_notice(cfg: AppConfig, spec: Any, trade: Any, demo: bool = False) -> tuple[str, str]:
+    """연습 매매가 끝났을 때 보낼 알림. 금액은 화면과 같은 방식(수수료·세금 뺀 값)으로 계산한다."""
+    cost = CostModel.from_config(cfg.strategy.get("costs"), spec.security_type)
+    qty = quantity(cfg, trade.entry_price)
+    net = amounts(cost, trade.entry_price, trade.exit_price, qty)["net"]
+    return notify.exit_message(spec.name or spec.code, trade.result, trade.entry_price,
+                               trade.exit_price, qty, net, demo)
+
+
+def notify_summary(cfg: notify.NotifyConfig, last: dict[str, Any] | None,
+                   remote: bool) -> dict[str, Any]:
+    """설정 화면에 보여줄 알림 상태. 토큰은 내보내지 않고, 주제 이름은 이 컴퓨터에만 보여준다."""
+    return {
+        "channel": cfg.channel, "ready": cfg.ready,
+        "telegram": {"has_token": bool(cfg.telegram_token), "has_chat": bool(cfg.telegram_chat)},
+        "ntfy": {"has_topic": bool(cfg.ntfy_topic), "topic": None if remote else cfg.ntfy_topic,
+                 "server": cfg.ntfy_server},
+        "on_entry": cfg.on_entry, "on_exit": cfg.on_exit, "last": last,
+    }
 
 
 # ---- DB 조회 -----------------------------------------------------------------

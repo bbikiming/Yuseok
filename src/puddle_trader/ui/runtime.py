@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import favorites
+from .. import notify as notify_mod
 from ..api.client import TossApiError, TossClient
 from ..api.endpoints import Account, MarketData, StockInfo
 from ..backtest import engine, runner
@@ -137,6 +138,7 @@ class UiApp:
         self._prev_day: date | None = None          # 위 값을 구한 날짜
         self._prev_loading = False
         self._prev_retry_at = 0.0
+        self.notifier = notify_mod.Notifier()
         self.prev_close_pause = 0.2     # 일봉 조회 사이 쉬는 시간 (신호 조회를 막지 않게)
         self.now_fn = service.now_kst
 
@@ -273,11 +275,21 @@ class UiApp:
         task.set("running", f"종목 {len(specs)}개를 지켜보는 중")
         self._event(f"신호를 기다리기 시작했어요 (종목 {len(specs)}개)")
 
+        by_id = {spec.id: spec for spec in specs}
+
         def on_event(kind: str, obj: Any) -> None:
             if kind == "error":
                 task.set(message=f"증권사 응답이 불안정해요 ({getattr(obj, 'code', '오류')})")
-            else:
-                task.set(message=f"종목 {len(specs)}개를 지켜보는 중")
+                return
+            task.set(message=f"종목 {len(specs)}개를 지켜보는 중")
+            try:      # 알림은 뒤에서 나간다. 문구를 만들다 실패해도 감시는 계속한다
+                if kind == "entry":
+                    self.notifier.submit("entry", *service.entry_notice(cfg, obj, self.demo))
+                elif kind == "exit" and obj.symbol_id in by_id:
+                    spec = by_id[obj.symbol_id]
+                    self.notifier.submit("exit", *service.exit_notice(cfg, spec, obj, self.demo))
+            except Exception:  # noqa: BLE001 - 알림 때문에 연습 매매가 멈추면 안 된다
+                pass
 
         try:
             scanner.run(

@@ -132,14 +132,23 @@ def watch(
     stop = threading.Event()
     _signal.signal(_signal.SIGINT, lambda *_: stop.set())
 
+    from .notify import Notifier
+    from .ui import service as ui_service
+
+    notifier = Notifier()       # .env 에 알림을 설정해 두었을 때만 실제로 보낸다
+
     def on_event(kind, obj):
         ts = datetime.now(repo.KST).strftime("%H:%M:%S")
         if kind == "entry":
             typer.echo(f"[{ts}] PAPER BUY {obj.spec.id} {obj.entry_price:,.0f} "
                        f"TP {obj.tp:,.0f} SL {obj.sl:,.0f}")
+            notifier.submit("entry", *ui_service.entry_notice(cfg, obj))
         elif kind == "exit":
             typer.echo(f"[{ts}] PAPER SELL {obj.symbol_id} {obj.exit_price:,.0f} "
                        f"{obj.result} 순수익 {obj.net_rate:+.3%}")
+            spec = next((sp for sp in specs if sp.id == obj.symbol_id), None)
+            if spec is not None:
+                notifier.submit("exit", *ui_service.exit_notice(cfg, spec, obj))
         else:
             typer.echo(f"[{ts}] API 오류: {obj}")
 

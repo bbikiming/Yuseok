@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import http.client
+import http.server
 import json
 import os
 import shutil
@@ -16,7 +17,7 @@ import yaml
 from helpers import KST
 
 from puddle_trader import config as config_mod
-from puddle_trader import favorites
+from puddle_trader import favorites, notify
 from puddle_trader.config import AppConfig, save_credentials, save_local_overrides
 from puddle_trader.db.database import connect
 from puddle_trader.ui import access, qr, service
@@ -37,7 +38,10 @@ def workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config_mod, "CONFIG_DIR", Path("config"))
     monkeypatch.setattr(config_mod, "load_dotenv", lambda *a, **k: False)
-    for key in ("TOSS_CLIENT_ID", "TOSS_CLIENT_SECRET", "TOSS_ACCOUNT_SEQ"):
+    for key in ("TOSS_CLIENT_ID", "TOSS_CLIENT_SECRET", "TOSS_ACCOUNT_SEQ", "TRADEBOT_NOTIFY",
+                "TRADEBOT_TELEGRAM_TOKEN", "TRADEBOT_TELEGRAM_CHAT", "TRADEBOT_TELEGRAM_API",
+                "TRADEBOT_NTFY_TOPIC", "TRADEBOT_NTFY_SERVER", "TRADEBOT_NOTIFY_ENTRY",
+                "TRADEBOT_NOTIFY_EXIT"):
         monkeypatch.setenv(key, "x")      # 테스트가 끝나면 원래 값으로 되돌리기 위해 등록
         monkeypatch.delenv(key)
     return tmp_path
@@ -336,6 +340,190 @@ def test_backfill_without_keys_reports_a_readable_error(served):
     snap = wait_for(lambda: (s := app.backfill_task.snapshot())["state"] != "running" and s)
     assert snap["state"] == "error" and "키가 없어요" in snap["message"]
     assert api.get("/api/backtest")[1]["backfill"]["state"] == "error"
+
+
+# ---- 휴대폰 알림 ---------------------------------------------------------------
+class FakePush:
+    """텔레그램·ntfy 를 흉내 내는 서버. 받은 요청을 적어 둔다."""
+
+    def __init__(self):
+        fake = self
+        self.requests: list[tuple[str, str, dict]] = []
+        self.updates: list[dict] = []
+        self.status = 200
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _reply(self, payload):
+                raw = json.dumps(payload).encode()
+                self.send_response(fake.status)
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):
+                fake.requests.append(("GET", self.path, {}))
+                self._reply({"ok": True, "result": fake.updates})
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                fake.requests.append(("POST", self.path, body))
+                self._reply({"ok": True})
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.05},
+                         daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+@pytest.fixture
+def push(monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    fake = FakePush()
+    yield fake
+    fake.close()
+
+
+TOKEN = "123456789:AAExampleTokenForTests_abcdefghijklmn"
+
+
+def test_messages_say_it_is_practice_and_show_won_amounts():
+    deadline = datetime(2026, 11, 13, 10, 36, tzinfo=KST)
+    title, body = notify.entry_message("삼성전자", 99_300, 3, 100_200, 98_800, deadline)
+    assert title == "신호 · 삼성전자 연습 매수"
+    assert "99,300원 × 3주" in body and "목표 100,200원 / 손절 98,800원 / 10:36까지" in body
+    assert "실제 주문 없음" in body
+    title, body = notify.exit_message("삼성전자", "LOSS", 99_300, 98_700, 3, -2481)
+    assert title == "삼성전자 · 손절로 팔았어요 −2,481원" and "99,300원 → 98,700원 × 3주" in body
+    assert notify.exit_message("A", "WIN", 1, 2, 1, 2009)[0] == "A · 목표가에 팔았어요 +2,009원"
+    assert "시간이 다 돼서" in notify.exit_message("A", "TIMEOUT", 1, 1, 1, -685)[0]
+    assert notify.entry_message("A", 1, 1, 2, 0, deadline, demo=True)[0].startswith("[데모] ")
+
+
+def test_telegram_finds_the_chat_and_sends(push):
+    cfg = notify.NotifyConfig(channel="telegram", telegram_token=TOKEN, telegram_api=push.url)
+    assert not cfg.ready
+    with pytest.raises(notify.NotifyError, match="먼저 아무 말이나"):
+        notify.find_telegram_chat(cfg)                    # 아직 봇에게 말을 건 적이 없다
+    push.updates = [{"message": {"chat": {"id": 111}}}, {"message": {"chat": {"id": 222}}}]
+    cfg.telegram_chat = notify.find_telegram_chat(cfg)
+    assert cfg.telegram_chat == "222" and cfg.ready       # 가장 최근 대화방
+    notify.send(cfg, "제목", "본문")
+    method, path, body = push.requests[-1]
+    assert (method, path) == ("POST", f"/bot{TOKEN}/sendMessage")
+    assert body["chat_id"] == "222" and body["text"] == "제목\n본문"
+
+
+def test_ntfy_sends_to_the_topic(push):
+    topic = notify.new_topic()
+    assert topic.startswith("puddle-") and len(topic) == 23 and topic != notify.new_topic()
+    cfg = notify.NotifyConfig(channel="ntfy", ntfy_topic=topic, ntfy_server=push.url)
+    notify.send(cfg, "제목", "본문")
+    assert push.requests[-1] == ("POST", "/", {"topic": topic, "title": "제목", "message": "본문"})
+
+
+def test_failures_are_readable_and_never_leak_the_token(push):
+    cfg = notify.NotifyConfig(channel="telegram", telegram_token=TOKEN, telegram_chat="1",
+                              telegram_api=push.url)
+    push.status = 401
+    with pytest.raises(notify.NotifyError) as err:
+        notify.send(cfg, "t", "b")
+    assert "토큰이 맞지 않아요" in str(err.value) and TOKEN not in str(err.value)
+    push.status = 500
+    with pytest.raises(notify.NotifyError, match="거절했어요"):
+        notify.send(notify.NotifyConfig(channel="ntfy", ntfy_topic="x", ntfy_server=push.url),
+                    "t", "b")
+    dead = notify.NotifyConfig(channel="telegram", telegram_token=TOKEN, telegram_chat="1",
+                               telegram_api="http://127.0.0.1:9")
+    with pytest.raises(notify.NotifyError) as err:
+        notify.send(dead, "t", "b")
+    assert TOKEN not in str(err.value) and "127.0.0.1" not in str(err.value)
+    with pytest.raises(notify.NotifyError, match="꺼져 있어요"):
+        notify.send(notify.NotifyConfig(), "t", "b")
+
+
+def test_notifier_sends_in_the_background_and_respects_the_switches(push):
+    cfg = notify.NotifyConfig(channel="ntfy", ntfy_topic="t1", ntfy_server=push.url, on_exit=False)
+    notifier = notify.Notifier(lambda: cfg, min_interval=0)
+    assert notifier.submit("entry", "산다", "본문") is True
+    assert notifier.submit("exit", "판다", "본문") is False          # 꺼 둔 종류
+    notifier.wait_idle()
+    assert [r[2]["title"] for r in push.requests] == ["산다"] and notifier.last["ok"] is True
+    cfg.channel = ""                                    # 알림을 끄면 아무것도 안 나간다
+    assert notifier.submit("entry", "산다", "본문") is False
+    # 보내다 실패해도 예외가 밖으로 나오지 않고, 이유만 남는다
+    cfg.channel, push.status = "ntfy", 500
+    notifier.submit("entry", "산다", "본문")
+    notifier.wait_idle()
+    assert notifier.last["ok"] is False and "거절" in notifier.last["error"]
+
+
+def test_alert_settings_are_saved_on_the_computer_only(served, push, monkeypatch):
+    _app, api = served
+    monkeypatch.setenv("TRADEBOT_TELEGRAM_API", push.url)
+    monkeypatch.setenv("TRADEBOT_NTFY_SERVER", push.url)
+    assert api.get("/api/settings")[1]["notify"]["channel"] == ""
+    assert api.post("/api/notify/test")[1]["ok"] is False            # 꺼져 있을 때
+    assert api.post("/api/notify/save", {"channel": "kakao"})[0] == 400
+    assert api.post("/api/notify/save", {"channel": "telegram"})[0] == 400       # 토큰 없음
+    assert api.post("/api/notify/save", {"channel": "telegram", "telegram_token": "abc"})[0] == 400
+
+    # 텔레그램: 토큰 저장 → 봇에게 말 걸기 전에는 안내, 건 뒤에는 대화방을 찾아 보낸다
+    status, body = api.post("/api/notify/save", {"channel": "telegram", "telegram_token": TOKEN})
+    assert status == 200 and body["telegram"] == {"has_token": True, "has_chat": False}
+    assert TOKEN not in json.dumps(body) and body["ready"] is False
+    assert "먼저 아무 말이나" in api.post("/api/notify/test")[1]["message"]
+    push.updates = [{"message": {"chat": {"id": 4242}}}]
+    assert api.post("/api/notify/test")[1]["ok"] is True
+    assert push.requests[-1][2]["chat_id"] == "4242" and "시험 알림" in push.requests[-1][2]["text"]
+    settings = api.get("/api/settings")[1]["notify"]
+    assert settings["ready"] is True and settings["last"]["ok"] is True
+    assert TOKEN not in json.dumps(api.get("/api/settings")[1])
+    env = Path(".env")
+    assert f"TRADEBOT_TELEGRAM_TOKEN={TOKEN}" in env.read_text(encoding="utf-8")
+    assert stat.S_IMODE(os.stat(env).st_mode) == 0o600
+
+    # ntfy: 주제 이름은 프로그램이 만들고, 스위치만 바꿔도 그대로 유지된다
+    body = api.post("/api/notify/save", {"channel": "ntfy", "on_entry": True, "on_exit": False})[1]
+    topic = body["ntfy"]["topic"]
+    assert topic.startswith("puddle-") and body["on_exit"] is False and body["ready"] is True
+    assert api.post("/api/notify/save", {"channel": "ntfy"})[1]["ntfy"]["topic"] == topic
+    renewed = api.post("/api/notify/save", {"channel": "ntfy", "new_topic": True})[1]
+    assert renewed["ntfy"]["topic"] != topic and renewed["on_exit"] is False
+    assert api.post("/api/notify/test")[1]["ok"] is True
+    assert push.requests[-1][2]["topic"] == renewed["ntfy"]["topic"]
+
+    # 휴대폰에서는 설정을 바꿀 수 없고, 주제 이름도 보이지 않는다
+    api.handler.force_remote, api.handler.access = True, access.Access(phone=True)
+    token, _ = api.handler.access.login("192.168.0.9", api.handler.access.code)
+    session = {"Cookie": f"pt_session={token}"}
+    assert api.post("/api/notify/save", {"channel": ""}, headers=session)[0] == 403
+    remote = api.get("/api/settings", headers=session)[1]["notify"]
+    assert remote["ntfy"]["topic"] is None and remote["ntfy"]["has_topic"] is True
+    assert api.post("/api/notify/test", headers=session)[1]["ok"] is True     # 시험 알림은 된다
+
+
+def test_demo_trade_sends_an_alert(workdir, push, monkeypatch):
+    monkeypatch.setenv("TRADEBOT_NOTIFY", "ntfy")
+    monkeypatch.setenv("TRADEBOT_NTFY_TOPIC", "puddle-test")
+    monkeypatch.setenv("TRADEBOT_NTFY_SERVER", push.url)
+    app = UiApp(demo=True, demo_lead_seconds=1.5)
+    app.start_watch()
+    try:
+        sent = wait_for(lambda: [r[2] for r in push.requests if r[0] == "POST"], timeout=20)
+    finally:
+        app.stop_watch()
+        wait_for(lambda: app.watch_task.snapshot()["state"] != "running", timeout=10)
+    assert sent[0]["topic"] == "puddle-test"
+    assert sent[0]["title"] == "[데모] 신호 · 예시종목 A 연습 매수"
+    assert "99,300원 × 3주" in sent[0]["message"] and "실제 주문 없음" in sent[0]["message"]
 
 
 # ---- 휴대폰 접속 ---------------------------------------------------------------

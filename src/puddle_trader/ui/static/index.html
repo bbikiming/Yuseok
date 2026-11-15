@@ -207,6 +207,8 @@ ul.srows a.r:hover{background:var(--fill-weak);text-decoration:none}
 ul.srows .l{min-width:0;display:flex;flex-direction:column}ul.srows .l b{font-size:15px;color:var(--ink)}
 ul.srows .v{flex:none;display:flex;flex-direction:column;align-items:flex-end;font-size:15px}
 ul.srows .s{font-size:13px;color:var(--sub)}ul.srows .s.up{color:var(--up)}ul.srows .s.down{color:var(--down)}
+label.check{display:inline-flex;align-items:center;gap:8px;min-height:44px;font-size:15px;cursor:pointer}
+label.check input{width:20px;height:20px;min-height:0;padding:0;accent-color:var(--blue)}
 .qr{flex:none;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
 .qr svg{display:block;border-radius:12px;border:1px solid var(--line)}
 .livedot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--mute);margin-right:6px}
@@ -721,6 +723,40 @@ async function viewSettings() {
   const f = (name, label, hint, val, step, unit) => `<label class="f">${label}<span class="h">${hint}</span>
 <span style="display:flex;align-items:center;gap:8px;font-weight:400"><input name="${name}" type="number" step="${step}" value="${val}" required><span class="unit">${unit}</span></span></label>`;
   const keyed = s.has_keys && !status.demo, ph = status.phone;
+  const nt = s.notify, last = nt.last;
+  const ntState = nt.ready ? `<span class="chip pass">켜짐 · ${nt.channel === "telegram" ? "텔레그램" : "ntfy"}</span>`
+    : nt.channel ? `<span class="chip fail">마무리 필요</span>` : `<span class="chip">꺼짐</span>`;
+  const step = (items) => `<ol class="reasons">` + items.map(([t, d], i) =>
+    `<li><span class="n">${i + 1}</span><span><b>${t}</b>${d ? ` <span class="sub">${d}</span>` : ""}</span></li>`).join("") + `</ol>`;
+  const ntLast = last ? `<p class="note small">${last.ok ? "마지막 알림을 보냈어요" : `마지막 알림을 보내지 못했어요: <b>${esc(last.error)}</b>`} <span class="sub num">(${esc(last.at.slice(5, 16).replace("T", " "))})</span></p>` : "";
+  const ntGuide = nt.channel === "telegram" ? step([
+      ["텔레그램에서 @BotFather 를 찾아 /newbot 을 보냅니다.", "이름을 두 번 물어보고, 끝나면 '토큰'(숫자:영문자)을 줍니다."],
+      ["그 토큰을 아래 칸에 붙여 넣고 저장합니다.", nt.telegram.has_token ? "지금 저장돼 있어요. 봇을 바꿀 때만 다시 넣으세요." : ""],
+      ["방금 만든 봇과의 대화방을 열고 아무 말이나 보냅니다.", "봇이 먼저 말을 걸 수 없어서 한 번은 내가 보내야 해요."],
+      ["'시험 알림 보내기'를 누릅니다.", nt.telegram.has_chat ? "대화방을 찾아 두었어요." : "이때 대화방을 찾아 기억합니다."]])
+    : nt.channel === "ntfy" ? step([
+      ["휴대폰에 ntfy 앱을 설치합니다.", "앱스토어·플레이스토어에서 'ntfy' 를 검색하세요. 가입은 필요 없어요."],
+      ["앱에서 '구독 추가'를 누르고 아래 주제 이름을 그대로 넣습니다.", ""],
+      ["'시험 알림 보내기'를 누릅니다.", ""]])
+    : `<p class="sub" style="font-size:15px">연습으로 사거나 팔았을 때 휴대폰으로 알려 줍니다. 집 밖에서도 받을 수 있어요. 알림은 바깥 서비스(텔레그램 또는 ntfy)를 거쳐서 가고, 종목 이름·가격·연습 손익이 그쪽으로 전달됩니다.</p>`;
+  const ntTopic = nt.channel === "ntfy" && nt.ntfy.topic ? `<div class="stats"><div class="stat" style="flex:1 1 260px"><div>주제 이름 (남에게 알려 주지 마세요)</div><div class="num" style="font-size:18px;overflow-wrap:anywhere">${esc(nt.ntfy.topic)}</div></div></div>` : "";
+  const notifyCard = `<section class="card"><div class="between"><h2>휴대폰 알림</h2>${ntState}</div>
+${ntGuide}${ntTopic}${ntLast}
+${status.remote ? `<p class="note">알림 설정은 컴퓨터에서만 바꿀 수 있어요.</p>
+${nt.ready ? `<div class="btns"><button type="button" class="btn primary" data-act="notify-test">시험 알림 보내기</button></div>` : ""}`
+    : `<form class="fields" data-form="notify">
+<label class="f">알림 방법<span class="h">둘 다 무료예요. 쓰던 앱이 있으면 그걸 고르세요</span>
+<select name="channel"><option value="" ${nt.channel ? "" : "selected"}>끄기</option>
+<option value="telegram" ${nt.channel === "telegram" ? "selected" : ""}>텔레그램</option>
+<option value="ntfy" ${nt.channel === "ntfy" ? "selected" : ""}>ntfy 앱 (가장 간단)</option></select></label>
+<label class="f">텔레그램 봇 토큰<span class="h">${nt.telegram.has_token ? "저장돼 있어요. 바꿀 때만 넣으세요" : "텔레그램을 고를 때만 필요해요"}</span>
+<input name="telegram_token" type="password" autocomplete="off" maxlength="100" placeholder="${nt.telegram.has_token ? "저장됨" : ""}"></label>
+<div style="flex:1 1 100%;display:flex;flex-wrap:wrap;gap:8px 20px">
+<label class="check"><input type="checkbox" name="on_entry" ${nt.on_entry ? "checked" : ""}>연습으로 샀을 때 알림</label>
+<label class="check"><input type="checkbox" name="on_exit" ${nt.on_exit ? "checked" : ""}>팔았을 때(결과) 알림</label></div>
+<div class="btns" style="flex:1 1 100%"><button class="btn primary">저장</button>
+<button type="button" class="btn" data-act="notify-test" ${nt.channel ? "" : "disabled"}>시험 알림 보내기</button>
+${nt.channel === "ntfy" ? `<button type="button" class="btn" data-act="notify-newtopic">주제 이름 새로 만들기</button>` : ""}</div></form>`}</section>`;
   const standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
   const installCard = !status.remote ? "" : standalone
@@ -775,7 +811,7 @@ ${f("tax", "주식 거래세", "주식을 팔 때 내는 세금 (ETF는 없음)"
 <div style="flex:1 1 100%"><button class="btn primary">저장</button></div></form></section>
 <section class="card w2"><h2>이 설정이면 한 번 거래에</h2>${economicsCard(s.economics, "STOCK")}
 <p class="note">값을 바꾸고 저장하면 이 금액이 바로 다시 계산됩니다.</p></section></div>
-${phoneCard}${installCard}
+${notifyCard}${phoneCard}${installCard}
 <p class="note teal">실제 주문을 켜는 설정은 없어요. 이 프로그램은 연습으로만 사고팝니다.</p>`;
 }
 
@@ -809,6 +845,8 @@ document.addEventListener("click", (ev) => {
   const a = b.dataset.act, m = b.dataset.m, c = b.dataset.c;
   if (a === "theme") toggleTheme();
   else if (a === "side") toggleSide(b.dataset.tab);
+  else if (a === "notify-test") act(async () => { const r = await api("/api/notify/test", {}); toast(r.message); });
+  else if (a === "notify-newtopic") { if (confirm("주제 이름을 새로 만들까요? 휴대폰 앱에서도 새 이름으로 다시 구독해야 해요.")) act(() => api("/api/notify/save", {channel: "ntfy", new_topic: true}), "새 주제 이름을 만들었어요"); }
   else if (a === "phone-revoke") { if (confirm("기억한 휴대폰을 모두 끊을까요? 다시 들어오려면 접속 코드를 넣어야 해요.")) act(() => api("/api/phone/revoke", {}), "모두 끊었어요"); }
   else if (a === "sheet-open") openSheet();
   else if (a === "sheet-close") closeSheet();
@@ -825,6 +863,8 @@ document.addEventListener("submit", (ev) => {
   ev.preventDefault();
   const d = Object.fromEntries(new FormData(form).entries()), kind = form.dataset.form;
   if (kind === "fav-add") act(() => api("/api/favorites/add", d), "추가했어요");
+  else if (kind === "notify") act(() => api("/api/notify/save", {channel: d.channel, telegram_token: d.telegram_token,
+    on_entry: form.elements.on_entry.checked, on_exit: form.elements.on_exit.checked}), "저장했어요");
   else if (kind === "creds") act(async () => { const r = await api("/api/credentials", d); toast(r.message); });
   else if (kind === "settings") act(() => api("/api/settings", {
     order_amount: d.order_amount, max_hold_minutes: d.max_hold_minutes, max_daily_entries: d.max_daily_entries,

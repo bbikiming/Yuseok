@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from .. import favorites
-from ..config import AppConfig, save_credentials, save_local_overrides
+from .. import favorites, notify
+from ..config import AppConfig, save_credentials, save_env_values, save_local_overrides
 from . import qr, service
 from .access import (
     COOKIE,
@@ -198,6 +198,46 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001 - 화면에는 일반 메시지만 보여준다
             self._json({"error": f"처리하지 못했어요 ({type(exc).__name__})"}, 500)
 
+    # ---- 휴대폰 알림 ----
+    def _save_notify(self, body: dict[str, Any]) -> dict[str, Any]:
+        cur = notify.NotifyConfig.from_env()
+        channel = str(body.get("channel", "")).strip().lower()
+        if channel not in ("", *notify.CHANNELS):
+            raise ApiError(400, "알림 방법을 다시 골라 주세요")
+        values = {"TRADEBOT_NOTIFY": channel}
+        for key, name in (("on_entry", "TRADEBOT_NOTIFY_ENTRY"),
+                          ("on_exit", "TRADEBOT_NOTIFY_EXIT")):
+            if key in body:             # 안 보낸 항목은 지금 값을 그대로 둔다
+                values[name] = "1" if body[key] else "0"
+        token = str(body.get("telegram_token", "")).strip()
+        if token:
+            head, _, tail = token.partition(":")
+            if not (head.isdigit() and 20 <= len(tail) <= 80
+                    and all(c.isalnum() or c in "_-" for c in tail)):
+                raise ApiError(400, "텔레그램 토큰 모양이 아니에요 (숫자:영문자 형태)")
+            values["TRADEBOT_TELEGRAM_TOKEN"] = token
+            values["TRADEBOT_TELEGRAM_CHAT"] = ""         # 봇이 바뀌면 대화방도 다시 찾는다
+        elif channel == "telegram" and not cur.telegram_token:
+            raise ApiError(400, "텔레그램 봇 토큰을 넣어 주세요")
+        if channel == "ntfy" and (not cur.ntfy_topic or body.get("new_topic")):
+            values["TRADEBOT_NTFY_TOPIC"] = notify.new_topic()
+        save_env_values(values)
+        return service.notify_summary(notify.NotifyConfig.from_env(), self.app.notifier.last,
+                                      False)
+
+    def _test_notify(self) -> dict[str, Any]:
+        cfg = notify.NotifyConfig.from_env()
+        try:
+            if cfg.channel == "telegram" and cfg.telegram_token and not cfg.telegram_chat:
+                save_env_values({"TRADEBOT_TELEGRAM_CHAT": notify.find_telegram_chat(cfg)})
+            self.app.notifier.send_now(
+                "웅덩이 트레이더 · 시험 알림",
+                "이 알림이 보이면 연결된 거예요. 신호가 오면 여기로 알려 드릴게요.\n"
+                "연습 매매 · 실제 주문 없음")
+        except notify.NotifyError as exc:
+            return {"ok": False, "message": str(exc)}
+        return {"ok": True, "message": "시험 알림을 보냈어요. 휴대폰을 확인해 주세요"}
+
     # ---- GET ----
     def do_GET(self) -> None:
         self._run(self._get)
@@ -222,7 +262,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"symbols": favorites.load()["symbols"], "demo": app.demo})
         if url.path == "/api/settings":
             auth = app.load_state().get("auth") or {}
+            alerts = service.notify_summary(notify.NotifyConfig.from_env(), app.notifier.last,
+                                            self._remote())
             return self._json({"values": service.read_settings(cfg), "has_keys": has_keys(),
+                               "notify": alerts,
                                "auth": auth, "economics": service.economics(cfg),
                                "watching": app.watch_task.snapshot()["state"] == "running"})
         conn = app.db()
@@ -279,6 +322,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True}, headers={"Set-Cookie": cookie})
         if not self._signed_in():
             raise ApiError(401, "접속 코드를 먼저 넣어 주세요")
+        if url.path == "/api/notify/save":
+            if self._remote():      # 토큰·주제 이름이 와이파이로 오가지 않게 한다
+                raise ApiError(403, "알림 설정은 컴퓨터에서만 바꿀 수 있어요")
+            return self._json(self._save_notify(body))
+        if url.path == "/api/notify/test":
+            return self._json(self._test_notify())
         if url.path == "/api/phone/revoke":
             if self._remote():
                 raise ApiError(403, "컴퓨터에서만 할 수 있어요")

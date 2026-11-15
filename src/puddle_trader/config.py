@@ -60,19 +60,37 @@ def credentials_present() -> bool:
     return bool(os.environ.get("TOSS_CLIENT_ID")) and bool(os.environ.get("TOSS_CLIENT_SECRET"))
 
 
-def save_credentials(client_id: str, client_secret: str, env_path: str | Path = ".env") -> None:
-    """API 키를 .env 에 저장한다 (다른 줄은 보존, 권한 600). 값은 어디에도 출력하지 않는다."""
+def save_env_values(values: dict[str, str], env_path: str | Path = ".env") -> None:
+    """값들을 .env 에 저장한다 (다른 줄은 보존, 권한 600). 값은 어디에도 출력하지 않는다.
+
+    빈 문자열을 주면 그 항목을 지운다. 줄바꿈이 든 값은 받지 않는다.
+    """
+    for key, value in values.items():
+        if any(c in value for c in "\r\n\x00") or not key.replace("_", "").isalnum():
+            raise ValueError("저장할 수 없는 값이에요")
     path = Path(env_path)
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    lines = [ln for ln in lines
-             if not ln.startswith(("TOSS_CLIENT_ID=", "TOSS_CLIENT_SECRET="))]
-    lines += [f"TOSS_CLIENT_ID={client_id}", f"TOSS_CLIENT_SECRET={client_secret}"]
+    lines = [ln for ln in lines if not ln.startswith(tuple(f"{k}=" for k in values))]
+    lines += [f"{k}={v}" for k, v in values.items() if v != ""]
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     os.chmod(path, 0o600)
-    os.environ["TOSS_CLIENT_ID"] = client_id
-    os.environ["TOSS_CLIENT_SECRET"] = client_secret
+    for key, value in values.items():
+        if value == "":
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def save_credentials(client_id: str, client_secret: str, env_path: str | Path = ".env") -> None:
+    """API 키를 .env 에 저장한다."""
+    save_env_values({"TOSS_CLIENT_ID": client_id, "TOSS_CLIENT_SECRET": client_secret}, env_path)
+
+
+def load_env() -> None:
+    """.env 를 읽어 환경 변수로 올린다 (이미 있는 값은 그대로)."""
+    _load_env()
 
 
 @dataclass
