@@ -19,7 +19,7 @@ from puddle_trader import config as config_mod
 from puddle_trader import favorites
 from puddle_trader.config import AppConfig, save_credentials, save_local_overrides
 from puddle_trader.db.database import connect
-from puddle_trader.ui import service
+from puddle_trader.ui import access, service
 from puddle_trader.ui.runtime import UiApp, previous_close, run_verdict
 from puddle_trader.ui.server import build_status, make_server
 
@@ -60,6 +60,7 @@ class Api:
         conn.request(method, path, body=raw, headers=hdrs)
         res = conn.getresponse()
         data = res.read()
+        self.headers = dict(res.getheaders())
         conn.close()
         if res.getheader("Content-Type", "").startswith("application/json"):
             return res.status, json.loads(data)
@@ -79,7 +80,25 @@ def served(workdir):
     thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05},
                               daemon=True)
     thread.start()
-    yield app, Api(httpd.server_address[1])
+    api = Api(httpd.server_address[1])
+    api.handler = httpd.RequestHandlerClass
+    yield app, api
+    httpd.shutdown()
+    httpd.server_close()
+    app.shutdown()
+
+
+@pytest.fixture
+def served_phone(workdir):
+    """휴대폰 접속을 켠 서버. 테스트 요청을 '다른 기기에서 온 것'으로 다룬다."""
+    app = UiApp()
+    httpd = make_server(app, 0, phone=True)
+    handler = httpd.RequestHandlerClass
+    handler.force_remote = True
+    thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05},
+                              daemon=True)
+    thread.start()
+    yield app, Api(httpd.server_address[1]), handler
     httpd.shutdown()
     httpd.server_close()
     app.shutdown()
@@ -316,6 +335,100 @@ def test_backfill_without_keys_reports_a_readable_error(served):
     snap = wait_for(lambda: (s := app.backfill_task.snapshot())["state"] != "running" and s)
     assert snap["state"] == "error" and "키가 없어요" in snap["message"]
     assert api.get("/api/backtest")[1]["backfill"]["state"] == "error"
+
+
+# ---- 휴대폰 접속 ---------------------------------------------------------------
+def test_host_names_that_may_reach_the_server():
+    for host in ("127.0.0.1:8765", "localhost", "[::1]:8765"):
+        assert access.host_allowed(host, phone=False) and access.host_allowed(host, phone=True)
+    # 기본(이 컴퓨터 전용)에서는 내부 주소로도 열리지 않는다
+    assert not access.host_allowed("192.168.0.5:8765", phone=False)
+    assert access.host_allowed("192.168.0.5:8765", phone=True)
+    assert access.host_allowed("10.0.0.7", phone=True)
+    # 도메인 이름(DNS 리바인딩)과 공인 주소는 휴대폰 접속을 켜도 받지 않는다
+    for host in ("evil.example:8765", "192.168.0.5.evil.example", "8.8.8.8:8765", ""):
+        assert not access.host_allowed(host, phone=True)
+    assert access.is_private("192.168.0.9") and access.is_private("::ffff:10.0.0.1")
+    assert not access.is_private("8.8.8.8") and not access.is_private("not-an-ip")
+
+
+def test_access_code_locks_after_repeated_mistakes():
+    now = [0.0]
+    acc = access.Access(phone=True, clock=lambda: now[0])
+    assert len(acc.code) == 6 and acc.code.isdigit()
+    wrong = "000000" if acc.code != "000000" else "111111"
+    for left in (4, 3, 2, 1):
+        token, reason = acc.login("192.168.0.9", wrong)
+        assert token is None and f"남은 횟수 {left}번" in reason
+    assert "잠시 막았어요" in acc.login("192.168.0.9", wrong)[1]
+    assert acc.login("192.168.0.9", acc.code)[0] is None      # 맞는 코드도 잠긴 동안은 안 된다
+    token, _ = acc.login("192.168.0.10", f"{acc.code[:3]} {acc.code[3:]}")   # 다른 기기는 영향 없음
+    assert token and acc.valid(token) and not acc.valid("guess") and not acc.valid(None)
+    now[0] += access.FAIL_WINDOW + 1
+    assert acc.login("192.168.0.9", acc.code)[0]                    # 시간이 지나면 풀린다
+    assert access.Access(phone=False).login("192.168.0.9", "")[0] is None
+
+
+def test_phone_must_enter_the_code_before_seeing_anything(served_phone):
+    _app, api, handler = served_phone
+    code = handler.access.code
+    status, page = api.get("/")
+    assert status == 200 and "접속 코드를 넣어 주세요" in page.decode()
+    assert "data-act" not in page.decode()                          # 본 화면은 내려가지 않는다
+    for path in ("/api/status", "/api/history", "/api/settings", "/api/favorites"):
+        assert api.get(path)[0] == 401
+    assert api.post("/api/watch/start")[0] == 401
+    assert api.post("/api/favorites/add", {"market": "KR", "code": "069500"})[0] == 401
+
+    wrong = "000000" if code != "000000" else "111111"
+    status, body = api.post("/api/login", {"code": wrong})
+    assert status == 403 and "맞지 않아요" in body["error"] and "Set-Cookie" not in api.headers
+    assert api.post("/api/login", {"code": code}, headers={"X-Tradebot": ""})[0] == 403
+
+    status, body = api.post("/api/login", {"code": code})
+    assert status == 200 and body == {"ok": True}
+    cookie = api.headers["Set-Cookie"]
+    assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
+    session = {"Cookie": cookie.split(";")[0]}
+    status, page = api.get("/", headers=session)
+    assert "data-act" in page.decode()
+    status, body = api.get("/api/status", headers=session)
+    assert status == 200 and body["remote"] is True and body["phone"] is None
+    assert code not in json.dumps(body)                  # 코드는 휴대폰 쪽으로 나가지 않는다
+    assert api.get("/api/status", headers={"Cookie": "pt_session=guess"})[0] == 401
+
+
+def test_phone_cannot_enter_keys_but_can_use_the_rest(served_phone):
+    _app, api, handler = served_phone
+    api.post("/api/login", {"code": handler.access.code})
+    session = {"Cookie": api.headers["Set-Cookie"].split(";")[0]}
+    status, body = api.post("/api/credentials", {"client_id": "a", "client_secret": "b"},
+                            headers=session)
+    assert status == 403 and "컴퓨터에서만" in body["error"] and not Path(".env").exists()
+    status, body = api.post("/api/favorites/add", {"market": "KR", "code": "069500"},
+                            headers=session)
+    assert status == 200 and any(x["code"] == "069500" for x in body["symbols"])
+    # 주소창 이름 검사: 내부 숫자 주소는 되고, 도메인 이름과 공인 주소는 안 된다
+    assert api.get("/api/status", headers={**session, "Host": "192.168.0.5:8765"})[0] == 200
+    assert api.get("/api/status", headers={**session, "Host": "evil.example"})[0] == 403
+    assert api.get("/api/status", headers={**session, "Host": "8.8.8.8:8765"})[0] == 403
+
+
+def test_computer_sees_the_phone_address_and_code(served_phone):
+    _app, api, handler = served_phone
+    handler.force_remote = False                                    # 이 컴퓨터에서 여는 경우
+    status, body = api.get("/api/status")                           # 코드 없이 바로 열린다
+    assert status == 200 and body["remote"] is False
+    assert body["phone"]["enabled"] is True and body["phone"]["code"] == handler.access.code
+    assert all(u.startswith("http://") for u in body["phone"]["urls"])
+
+
+def test_other_devices_are_refused_unless_phone_access_is_on(served):
+    _app, api = served
+    assert api.get("/api/status")[1]["phone"] == {"enabled": False, "urls": [], "code": ""}
+    api.handler.force_remote = True          # 127.0.0.1 로만 듣지만, 그래도 한 번 더 막는다
+    assert api.get("/")[0] == 403 and api.get("/api/status")[0] == 403
+    assert api.post("/api/login", {"code": ""})[0] == 403
 
 
 # ---- 기록·신호 상세 ------------------------------------------------------------

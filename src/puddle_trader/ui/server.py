@@ -1,15 +1,17 @@
 """로컬 웹 서버: 화면(index.html) 한 장과 JSON API.
 
-보안: 이 컴퓨터(127.0.0.1)에서만 연다. 값을 바꾸는 요청은
-- Host 가 localhost / 127.0.0.1 이어야 하고 (DNS 리바인딩 차단)
-- X-Tradebot: 1 헤더가 있어야 한다 (다른 웹사이트가 몰래 보내는 요청 차단. 브라우저는
-  사용자 지정 헤더가 붙은 교차 출처 요청을 사전 확인 없이 보내지 않는다).
+보안: 기본은 이 컴퓨터(127.0.0.1)에서만 연다.
+- Host 가 이 컴퓨터를 가리켜야 하고 (DNS 리바인딩 차단)
+- 값을 바꾸는 요청은 X-Tradebot: 1 헤더가 있어야 한다 (다른 웹사이트가 몰래 보내는 요청 차단.
+  브라우저는 사용자 지정 헤더가 붙은 교차 출처 요청을 사전 확인 없이 보내지 않는다).
+- 휴대폰 접속(--phone)을 켜면 다른 기기는 접속 코드를 넣어야 하고, 키 입력은 못 한다 (access.py).
 """
 from __future__ import annotations
 
 import json
 import threading
 from datetime import datetime, timedelta
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 from .. import favorites
 from ..config import AppConfig, save_credentials, save_local_overrides
 from . import service
+from .access import COOKIE, Access, host_allowed, is_loopback, is_private, lan_addresses
 from .runtime import UiApp, has_keys
 
 STATIC = Path(__file__).with_name("static")
@@ -30,7 +33,9 @@ class ApiError(Exception):
         super().__init__(message)
 
 
-def build_status(app: UiApp) -> dict[str, Any]:
+def build_status(app: UiApp, remote: bool = False,
+                 phone: dict[str, Any] | None = None) -> dict[str, Any]:
+    """remote: 다른 기기(휴대폰)에서 보는 중인가. phone: 이 컴퓨터에서만 보여줄 접속 안내."""
     cfg = AppConfig.load()
     state = app.load_state()
     conn = app.db()
@@ -66,6 +71,7 @@ def build_status(app: UiApp) -> dict[str, Any]:
     n_symbols = (3 if app.demo else
                  sum(1 for x in favorites.load()["symbols"] if x.get("enabled", True)))
     return {
+        "remote": remote, "phone": None if remote else phone,
         "demo": app.demo, "mode": "paper", "now": now.isoformat(timespec="seconds"),
         "in_session": app.in_session(), "has_keys": has_keys(), "connected": bool(auth.get("ok")),
         "watch": watching,
@@ -85,28 +91,60 @@ def build_status(app: UiApp) -> dict[str, Any]:
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    app: UiApp            # serve() 가 채운다
+    app: UiApp            # make_server() 가 채운다
+    access: Access
+    force_remote = False  # 테스트용: 이 컴퓨터에서 온 요청도 다른 기기처럼 다룬다
 
     def log_message(self, *args) -> None:    # 터미널을 어지럽히지 않는다
         pass
 
     # ---- 공통 ----
-    def _send(self, status: int, body: bytes, ctype: str) -> None:
+    def _send(self, status: int, body: bytes, ctype: str,
+              headers: dict[str, str] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
-    def _json(self, payload: Any, status: int = 200) -> None:
+    def _json(self, payload: Any, status: int = 200,
+              headers: dict[str, str] | None = None) -> None:
         self._send(status, json.dumps(payload, ensure_ascii=False).encode(),
-                   "application/json; charset=utf-8")
+                   "application/json; charset=utf-8", headers)
 
     def _host_ok(self) -> bool:
-        host = (self.headers.get("Host") or "").split(":")[0].lower()
-        return host in ("127.0.0.1", "localhost")
+        return host_allowed(self.headers.get("Host") or "", self.access.phone)
+
+    def _client(self) -> str:
+        return str(self.client_address[0])
+
+    def _remote(self) -> bool:
+        """다른 기기(휴대폰)에서 온 요청인가."""
+        return self.force_remote or not is_loopback(self._client())
+
+    def _session(self) -> str | None:
+        try:
+            morsel = SimpleCookie(self.headers.get("Cookie") or "").get(COOKIE)
+        except CookieError:
+            return None
+        return morsel.value if morsel else None
+
+    def _signed_in(self) -> bool:
+        return not self._remote() or self.access.valid(self._session())
+
+    def _phone_info(self) -> dict[str, Any]:
+        """이 컴퓨터의 화면에만 보여주는 휴대폰 접속 안내."""
+        port = self.server.server_address[1]
+        if not self.access.phone:
+            return {"enabled": False, "urls": [], "code": ""}
+        return {"enabled": True, "code": self.access.code,
+                "urls": [f"http://{ip}:{port}" for ip in lan_addresses()]}
 
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -125,6 +163,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not self._host_ok():
                 raise ApiError(403, "이 컴퓨터에서만 열 수 있어요")
+            if self._remote() and not (self.access.phone and is_private(self._client())):
+                raise ApiError(403, "이 컴퓨터에서만 열 수 있어요")
             fn()
         except ApiError as exc:
             self._json({"error": exc.message}, exc.status)
@@ -142,10 +182,13 @@ class Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         app = self.app
         if url.path in ("/", "/index.html"):
-            return self._send(200, (STATIC / "index.html").read_bytes(),
-                              "text/html; charset=utf-8")
+            # 접속 코드를 넣기 전에는 코드 입력 화면만 보여준다
+            page = "index.html" if self._signed_in() else "login.html"
+            return self._send(200, (STATIC / page).read_bytes(), "text/html; charset=utf-8")
+        if not self._signed_in():
+            raise ApiError(401, "접속 코드를 먼저 넣어 주세요")
         if url.path == "/api/status":
-            return self._json(build_status(app))
+            return self._json(build_status(app, self._remote(), self._phone_info()))
         cfg = AppConfig.load()
         if url.path == "/api/favorites":
             return self._json({"symbols": favorites.load()["symbols"], "demo": app.demo})
@@ -197,6 +240,16 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         body = self._body()
         app = self.app
+        if url.path == "/api/login":
+            if not self._remote():
+                return self._json({"ok": True})
+            token, reason = self.access.login(self._client(), str(body.get("code", "")))
+            if token is None:
+                raise ApiError(403, reason)
+            cookie = f"{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"
+            return self._json({"ok": True}, headers={"Set-Cookie": cookie})
+        if not self._signed_in():
+            raise ApiError(401, "접속 코드를 먼저 넣어 주세요")
         if url.path == "/api/watch/start":
             return self._json({"started": app.start_watch()})
         if url.path == "/api/watch/stop":
@@ -205,6 +258,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/auth/check":
             return self._json(app.check_connection())
         if url.path == "/api/credentials":
+            if self._remote():      # 암호화되지 않은 와이파이로 키가 오가지 않게 한다
+                raise ApiError(403, "키는 컴퓨터에서만 넣을 수 있어요")
             cid = str(body.get("client_id", "")).strip()
             secret = str(body.get("client_secret", "")).strip()
             if not cid or not secret or len(cid) > 200 or len(secret) > 200 \
@@ -242,15 +297,19 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(404, "없는 주소예요")
 
 
-def make_server(app: UiApp, port: int = 8765) -> ThreadingHTTPServer:
-    handler = type("BoundHandler", (Handler,), {"app": app})
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+def make_server(app: UiApp, port: int = 8765, phone: bool = False) -> ThreadingHTTPServer:
+    """phone=True 면 같은 와이파이의 기기도 접속할 수 있게 모든 주소에서 듣는다 (접속 코드 필요)."""
+    handler = type("BoundHandler", (Handler,), {"app": app, "access": Access(phone)})
+    httpd = ThreadingHTTPServer(("0.0.0.0" if phone else "127.0.0.1", port), handler)
     httpd.daemon_threads = True
     return httpd
 
 
-def serve(app: UiApp, port: int = 8765, ready: threading.Event | None = None) -> None:
-    httpd = make_server(app, port)
+def serve(app: UiApp, port: int = 8765, ready: threading.Event | None = None,
+          phone: bool = False, on_start=None) -> None:
+    httpd = make_server(app, port, phone)
+    if on_start is not None:
+        on_start(httpd.RequestHandlerClass.access)
     if ready is not None:
         ready.set()
     try:

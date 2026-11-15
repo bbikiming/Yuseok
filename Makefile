@@ -1,4 +1,4 @@
-.PHONY: ui demo help setup install init auth test lint fmt watch backfill backtest bench clean
+.PHONY: ui demo phone help setup install init auth test lint fmt watch backfill backtest bench clean
 
 help:           ## 명령 목록
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -35,6 +35,9 @@ ui:             ## 브라우저 화면 (실주문 없음)
 
 demo:           ## 키 없이 가상 데이터로 화면 둘러보기
 	tradebot ui --demo
+
+phone:          ## 같은 와이파이의 휴대폰에서도 화면 열기 (접속 코드 필요)
+	tradebot ui --phone
 
 bench:          ## 지연 벤치마크 (가짜 서버)
 	tradebot bench --latency-ms 150 --server-limit 10

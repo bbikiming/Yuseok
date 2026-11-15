@@ -211,10 +211,13 @@ def ui(
     port: int = typer.Option(8765, "--port"),
     demo: bool = typer.Option(False, "--demo", help="API 키 없이 가상 데이터로 화면을 써 본다"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="브라우저 자동 열기"),
+    phone: bool = typer.Option(
+        False, "--phone", help="같은 와이파이의 휴대폰에서도 열 수 있게 한다 (접속 코드 필요)"),
 ) -> None:
-    """브라우저로 여는 화면을 띄운다 (이 컴퓨터에서만 접속 가능, 실주문 없음)."""
+    """브라우저로 여는 화면을 띄운다 (기본은 이 컴퓨터에서만 접속 가능, 실주문 없음)."""
     import webbrowser
 
+    from .ui.access import lan_addresses
     from .ui.runtime import UiApp
     from .ui.server import serve
 
@@ -229,8 +232,22 @@ def ui(
         ui_app.start_watch()
     if open_browser:
         webbrowser.open(url)
+    def announce(access) -> None:
+        if not phone:
+            return
+        ips = lan_addresses()
+        typer.echo("[UI] 휴대폰 접속을 켰습니다. 휴대폰을 이 컴퓨터와 같은 와이파이에 연결한 뒤:")
+        for ip in ips:
+            typer.echo(f"       주소  http://{ip}:{port}")
+        if not ips:
+            typer.echo("       (이 컴퓨터의 내부 주소를 찾지 못했어요. 네트워크 설정에서 IP 를 "
+                       f"확인해 http://<IP>:{port} 로 여세요)")
+        typer.echo(f"       접속 코드  {access.code[:3]} {access.code[3:]}")
+        typer.echo("[UI] 통신이 암호화되지 않습니다. 집처럼 믿을 수 있는 와이파이에서만 쓰고, "
+                   "카페·공용 와이파이에서는 켜지 마세요.")
+
     try:
-        serve(ui_app, port)
+        serve(ui_app, port, phone=phone, on_start=announce)
     except KeyboardInterrupt:
         typer.echo("\n[UI] 종료합니다.")
     except OSError as exc:
