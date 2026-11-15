@@ -20,6 +20,7 @@ from puddle_trader import favorites
 from puddle_trader.config import AppConfig, save_credentials, save_local_overrides
 from puddle_trader.db.database import connect
 from puddle_trader.ui import access, qr, service
+from puddle_trader.ui import server as server_mod
 from puddle_trader.ui.runtime import UiApp, previous_close, run_verdict
 from puddle_trader.ui.server import build_status, make_server
 
@@ -489,10 +490,72 @@ def test_computer_gets_a_qr_that_opens_the_page_with_the_code(served_phone, monk
     assert "접속 코드를 넣어 주세요" in page and 'get("code")' in page
 
 
+def test_phone_is_remembered_across_restarts_until_revoked(tmp_path):
+    store, now = tmp_path / "data" / "ui_sessions.json", [1_000_000.0]
+    first = access.Access(phone=True, store=store, wall=lambda: now[0])
+    token, _ = first.login("192.168.0.9", first.code)
+    assert first.count() == 1 and stat.S_IMODE(os.stat(store).st_mode) == 0o600
+    assert token not in store.read_text(encoding="utf-8")            # 파일에는 해시만 남는다
+
+    # 프로그램을 다시 켜면 코드는 바뀌지만, 그 휴대폰은 그대로 들어온다
+    second = access.Access(phone=True, store=store, wall=lambda: now[0])
+    assert second.valid(token) and not second.valid("guess") and second.count() == 1
+    now[0] += access.SESSION_SECONDS + 1                              # 30일이 지나면 끝
+    assert not second.valid(token) and second.count() == 0
+    now[0] -= access.SESSION_SECONDS + 1
+
+    third = access.Access(phone=True, store=store, wall=lambda: now[0])
+    assert third.revoke_all() == 1 and not third.valid(token)
+    assert not access.Access(phone=True, store=store, wall=lambda: now[0]).valid(token)
+    # 저장 파일이 깨져 있어도 켜진다
+    store.write_text("not json", encoding="utf-8")
+    assert access.Access(phone=True, store=store).count() == 0
+
+
+def test_home_screen_files_are_served_without_the_code(served_phone):
+    _app, api, _handler = served_phone
+    status, raw = api.get("/manifest.webmanifest")
+    manifest = json.loads(raw)
+    assert status == 200 and manifest["display"] == "standalone" and manifest["start_url"] == "/"
+    assert manifest["name"] == "웅덩이 트레이더"
+    for icon in manifest["icons"]:
+        status, data = api.get(icon["src"])
+        assert status == 200 and len(data) > 200
+        if icon["type"] == "image/png":                               # PNG 머리와 적힌 크기 확인
+            assert data[:8] == b"\x89PNG\r\n\x1a\n"
+            width = int.from_bytes(data[16:20], "big")
+            assert f"{width}x{int.from_bytes(data[20:24], 'big')}" == icon["sizes"]
+    status, data = api.get("/apple-touch-icon.png")
+    assert status == 200 and int.from_bytes(data[16:20], "big") == 180
+    # 두 화면 모두 홈 화면 추가에 필요한 정보를 담고 있다
+    for page in (api.get("/")[1].decode(),
+                 (Path(server_mod.__file__).parent / "static" / "index.html").read_text("utf-8")):
+        for needle in ('rel="manifest"', 'rel="apple-touch-icon"', "apple-mobile-web-app-capable",
+                       'name="theme-color"', "viewport-fit=cover"):
+            assert needle in page
+    # 그 밖의 파일은 주지 않는다 (경로를 거슬러 올라가는 요청 포함)
+    assert api.get("/index.html.bak")[0] in (401, 404)
+    assert api.get("/../access.py")[0] in (401, 404)
+    assert api.get("/static/index.html")[0] in (401, 404)
+
+
+def test_only_the_computer_can_forget_phones(served_phone):
+    _app, api, handler = served_phone
+    api.post("/api/login", {"code": handler.access.code})
+    session = {"Cookie": api.headers["Set-Cookie"].split(";")[0]}
+    assert api.post("/api/phone/revoke", headers=session)[0] == 403   # 휴대폰에서는 못 한다
+    handler.force_remote = False
+    assert api.get("/api/status")[1]["phone"]["devices"] == 1
+    assert api.post("/api/phone/revoke")[1] == {"revoked": 1}
+    handler.force_remote = True
+    assert api.get("/api/status", headers=session)[0] == 401          # 끊긴 휴대폰은 다시 코드부터
+
+
 def test_other_devices_are_refused_unless_phone_access_is_on(served):
     _app, api = served
-    assert api.get("/api/status")[1]["phone"] == {"enabled": False, "urls": [], "code": "",
-                                                  "qr": None}
+    assert api.get("/api/status")[1]["phone"] == {
+        "enabled": False, "urls": [], "code": "", "qr": None, "name_url": "", "devices": 0}
+    assert api.post("/api/phone/revoke")[1] == {"revoked": 0}
     api.handler.force_remote = True          # 127.0.0.1 로만 듣지만, 그래도 한 번 더 막는다
     assert api.get("/")[0] == 403 and api.get("/api/status")[0] == 403
     assert api.post("/api/login", {"code": ""})[0] == 403

@@ -20,11 +20,30 @@ from urllib.parse import parse_qs, urlparse
 from .. import favorites
 from ..config import AppConfig, save_credentials, save_local_overrides
 from . import qr, service
-from .access import COOKIE, Access, host_allowed, is_loopback, is_private, lan_addresses
+from .access import (
+    COOKIE,
+    SESSION_SECONDS,
+    Access,
+    host_allowed,
+    is_loopback,
+    is_private,
+    lan_addresses,
+    local_name,
+)
 from .runtime import UiApp, has_keys
 
 STATIC = Path(__file__).with_name("static")
 MAX_BODY = 64 * 1024
+# 홈 화면에 추가할 때 휴대폰이 받아 가는 파일들. 민감한 내용이 없어서 접속 코드 없이도 준다
+PUBLIC_FILES = {
+    "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json; charset=utf-8"),
+    "/icon.svg": ("icon.svg", "image/svg+xml"),
+    "/icon-180.png": ("icon-180.png", "image/png"),
+    "/icon-192.png": ("icon-192.png", "image/png"),
+    "/icon-512.png": ("icon-512.png", "image/png"),
+    "/apple-touch-icon.png": ("icon-180.png", "image/png"),
+    "/favicon.ico": ("icon-192.png", "image/png"),
+}
 
 
 class ApiError(Exception):
@@ -142,11 +161,15 @@ class Handler(BaseHTTPRequestHandler):
         """이 컴퓨터의 화면에만 보여주는 휴대폰 접속 안내."""
         port = self.server.server_address[1]
         if not self.access.phone:
-            return {"enabled": False, "urls": [], "code": "", "qr": None}
+            return {"enabled": False, "urls": [], "code": "", "qr": None, "name_url": "",
+                    "devices": 0}
         urls = [f"http://{ip}:{port}" for ip in lan_addresses()]
+        name = local_name()
         # 카메라로 찍으면 주소와 접속 코드가 한 번에 들어가는 QR (첫 번째 주소 기준)
         rows = list(qr.matrix(f"{urls[0]}/?code={self.access.code}")) if urls else None
-        return {"enabled": True, "code": self.access.code, "urls": urls, "qr": rows}
+        return {"enabled": True, "code": self.access.code, "urls": urls, "qr": rows,
+                "name_url": f"http://{name}:{port}" if name else "",
+                "devices": self.access.count()}
 
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -183,6 +206,9 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         app = self.app
+        if url.path in PUBLIC_FILES:
+            name, ctype = PUBLIC_FILES[url.path]
+            return self._send(200, (STATIC / name).read_bytes(), ctype)
         if url.path in ("/", "/index.html"):
             # 접속 코드를 넣기 전에는 코드 입력 화면만 보여준다
             page = "index.html" if self._signed_in() else "login.html"
@@ -248,10 +274,15 @@ class Handler(BaseHTTPRequestHandler):
             token, reason = self.access.login(self._client(), str(body.get("code", "")))
             if token is None:
                 raise ApiError(403, reason)
-            cookie = f"{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"
+            cookie = (f"{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; "
+                      f"Max-Age={SESSION_SECONDS}")
             return self._json({"ok": True}, headers={"Set-Cookie": cookie})
         if not self._signed_in():
             raise ApiError(401, "접속 코드를 먼저 넣어 주세요")
+        if url.path == "/api/phone/revoke":
+            if self._remote():
+                raise ApiError(403, "컴퓨터에서만 할 수 있어요")
+            return self._json({"revoked": self.access.revoke_all()})
         if url.path == "/api/watch/start":
             return self._json({"started": app.start_watch()})
         if url.path == "/api/watch/stop":
@@ -301,7 +332,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_server(app: UiApp, port: int = 8765, phone: bool = False) -> ThreadingHTTPServer:
     """phone=True 면 같은 와이파이의 기기도 접속할 수 있게 모든 주소에서 듣는다 (접속 코드 필요)."""
-    handler = type("BoundHandler", (Handler,), {"app": app, "access": Access(phone)})
+    store = app.state_dir / "ui_sessions.json" if phone and not app.demo else None
+    handler = type("BoundHandler", (Handler,), {"app": app, "access": Access(phone, store=store)})
     httpd = ThreadingHTTPServer(("0.0.0.0" if phone else "127.0.0.1", port), handler)
     httpd.daemon_threads = True
     return httpd

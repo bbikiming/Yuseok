@@ -2,7 +2,15 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#FFFFFF">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="웅덩이">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-180.png">
 <title>웅덩이 트레이더</title>
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
@@ -39,7 +47,8 @@ h2{margin:0;font-size:20px;line-height:1.4;font-weight:700;color:var(--ink)}
 b,strong{font-weight:700}
 p{margin:0}.sub,.sub b{color:var(--sub)}.small{font-size:14px}.num{font-variant-numeric:tabular-nums}
 .up,b.up,strong.up,.up b{color:var(--up)}.down,b.down,strong.down,.down b{color:var(--down)}
-header.top{position:sticky;top:0;z-index:3;background:var(--surface);border-bottom:1px solid var(--line)}
+header.top{position:sticky;top:0;z-index:3;background:var(--surface);border-bottom:1px solid var(--line);
+padding-top:env(safe-area-inset-top)}
 .bar{max-width:1140px;margin:0 auto;padding:0 24px;min-height:60px;display:flex;flex-wrap:wrap;align-items:center;
 gap:8px 16px}
 .brand{display:flex;align-items:center;min-height:44px;color:var(--ink)}.brand:hover{text-decoration:none}
@@ -279,6 +288,7 @@ function drawTheme() {
   const dark = isDark(), b = $("#themebtn");
   b.setAttribute("aria-label", dark ? "밝은 화면으로 바꾸기" : "어두운 화면으로 바꾸기");
   b.title = dark ? "밝은 화면" : "어두운 화면";
+  $('meta[name="theme-color"]').content = dark ? "#202027" : "#FFFFFF";   // 휴대폰 위쪽 띠 색도 맞춘다
   b.innerHTML = `<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="${dark
     ? "M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM11 1h2v3h-2zm0 19h2v3h-2zM1 11h3v2H1zm19 0h3v2h-3zM4.2 5.6l1.4-1.4 2.2 2.1-1.5 1.5zm12 12 1.5-1.4 2.1 2.1-1.4 1.5zM4.2 18.3l2.1-2.1 1.5 1.4-2.2 2.2zm12-12 2.1-2.1 1.4 1.4-2.1 2.2z"
     : "M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"}"/></svg>`;
@@ -711,13 +721,34 @@ async function viewSettings() {
   const f = (name, label, hint, val, step, unit) => `<label class="f">${label}<span class="h">${hint}</span>
 <span style="display:flex;align-items:center;gap:8px;font-weight:400"><input name="${name}" type="number" step="${step}" value="${val}" required><span class="unit">${unit}</span></span></label>`;
   const keyed = s.has_keys && !status.demo, ph = status.phone;
+  const standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  const installCard = !status.remote ? "" : standalone
+    ? `<section class="card"><div class="between"><h2>홈 화면 앱</h2><span class="chip pass">앱으로 여는 중</span></div>
+<p class="sub" style="font-size:15px">컴퓨터에서 프로그램이 켜져 있고 같은 와이파이일 때 열립니다. 주소가 바뀌어 안 열리면 아이콘을 지우고 다시 추가해 주세요.</p></section>`
+    : `<section class="card"><h2>홈 화면에 앱처럼 추가</h2>
+<p class="sub" style="font-size:15px">아이콘을 눌러 바로 열 수 있어요. 주소창 없이 앱처럼 보입니다.</p>
+<ol class="reasons">${(ios ? [
+      ["Safari 로 이 화면을 엽니다.", "다른 앱 안에서 열렸다면 Safari 로 다시 열어 주세요."],
+      ["아래쪽 공유 버튼(네모에서 화살표가 나가는 모양)을 누릅니다.", ""],
+      ["목록에서 '홈 화면에 추가'를 누르고 '추가'를 누릅니다.", ""],
+      ["홈 화면의 아이콘으로 처음 열 때 접속 코드를 한 번 더 넣습니다.", "아이콘으로 여는 앱은 Safari 와 로그인을 따로 기억해요."],
+    ] : [
+      ["Chrome 으로 이 화면을 엽니다.", ""],
+      ["오른쪽 위 ⋮ 메뉴를 누릅니다.", ""],
+      ["'홈 화면에 추가'를 누르고 '추가'를 누릅니다.", "휴대폰에 따라 주소창이 있는 화면으로 열릴 수 있어요."],
+    ]).map(([t, d], i) => `<li><span class="n">${i + 1}</span><span><b>${t}</b>${d ? ` <span class="sub">${d}</span>` : ""}</span></li>`).join("")}</ol>
+<p class="note small">컴퓨터에서 프로그램이 켜져 있고 같은 와이파이일 때만 열립니다. 밖(이동통신)에서는 열리지 않아요.</p></section>`;
   const phoneCard = status.remote ? "" : `<section class="card"><div class="between"><h2>휴대폰으로 열기</h2>
 ${ph && ph.enabled ? `<span class="chip pass">켜짐</span>` : `<span class="chip">꺼짐</span>`}</div>
 ${ph && ph.enabled ? `<p class="sub" style="font-size:15px">휴대폰을 이 컴퓨터와 같은 와이파이에 연결한 뒤, ${ph.qr ? "카메라로 QR 코드를 찍거나 " : ""}휴대폰 브라우저 주소창에 아래 주소를 넣고 접속 코드를 입력하세요.</p>
 <div class="stats">${ph.qr ? `<div class="qr">${qrSvg(ph.qr)}<span class="small sub">휴대폰 카메라로 찍으면<br>바로 열려요</span></div>` : ""}
 <div class="stat" style="flex:2 1 240px"><div>주소</div><div class="num" style="font-size:18px;overflow-wrap:anywhere">${ph.urls.length ? ph.urls.map(esc).join("<br>") : "내부 주소를 찾지 못했어요"}</div></div>
 <div class="stat"><div>접속 코드</div><div class="num">${esc(ph.code.slice(0, 3))} ${esc(ph.code.slice(3))}</div></div></div>
-<p class="note small">통신이 암호화되지 않아요. 집처럼 믿을 수 있는 와이파이에서만 쓰고, 카페·공용 와이파이에서는 켜지 마세요. 코드는 프로그램을 다시 켤 때마다 바뀝니다. 키(Client ID·Secret)는 휴대폰에서 넣을 수 없어요.</p>`
+${ph.name_url ? `<p class="small sub num">공유기가 주소를 바꿔 위 주소가 안 열리면 <b>${esc(ph.name_url)}</b> 도 써 보세요. 홈 화면에 추가할 때는 이 주소가 더 오래 갑니다.</p>` : ""}
+<div class="between" style="align-items:center"><span class="small sub">휴대폰에서 연 뒤 설정에 들어가면 <b>홈 화면에 앱처럼 추가</b>하는 방법이 나와요. 지금 기억하고 있는 기기: <b class="num">${ph.devices}대</b></span>
+<button type="button" class="btn small" data-act="phone-revoke" ${ph.devices ? "" : "disabled"}>기억한 기기 모두 끊기</button></div>
+<p class="note small">통신이 암호화되지 않아요. 집처럼 믿을 수 있는 와이파이에서만 쓰고, 카페·공용 와이파이에서는 켜지 마세요. 코드는 프로그램을 다시 켤 때마다 바뀌지만, 한 번 들어온 휴대폰은 30일 동안 다시 묻지 않아요. 키(Client ID·Secret)는 휴대폰에서 넣을 수 없어요.</p>`
     : `<p class="sub" style="font-size:15px">지금은 이 컴퓨터에서만 열립니다. 휴대폰에서도 보려면 프로그램을 끄고(Ctrl-C) 터미널에서 아래처럼 다시 켜 주세요.</p>
 <p class="note num"><b>tradebot ui --phone</b></p>
 <p class="small sub">같은 와이파이에 있는 기기만, 접속 코드를 넣어야 들어올 수 있어요.</p>`}</section>`;
@@ -744,7 +775,7 @@ ${f("tax", "주식 거래세", "주식을 팔 때 내는 세금 (ETF는 없음)"
 <div style="flex:1 1 100%"><button class="btn primary">저장</button></div></form></section>
 <section class="card w2"><h2>이 설정이면 한 번 거래에</h2>${economicsCard(s.economics, "STOCK")}
 <p class="note">값을 바꾸고 저장하면 이 금액이 바로 다시 계산됩니다.</p></section></div>
-${phoneCard}
+${phoneCard}${installCard}
 <p class="note teal">실제 주문을 켜는 설정은 없어요. 이 프로그램은 연습으로만 사고팝니다.</p>`;
 }
 
@@ -778,6 +809,7 @@ document.addEventListener("click", (ev) => {
   const a = b.dataset.act, m = b.dataset.m, c = b.dataset.c;
   if (a === "theme") toggleTheme();
   else if (a === "side") toggleSide(b.dataset.tab);
+  else if (a === "phone-revoke") { if (confirm("기억한 휴대폰을 모두 끊을까요? 다시 들어오려면 접속 코드를 넣어야 해요.")) act(() => api("/api/phone/revoke", {}), "모두 끊었어요"); }
   else if (a === "sheet-open") openSheet();
   else if (a === "sheet-close") closeSheet();
   else if (a === "watch-start") act(() => api("/api/watch/start", {}), "연습을 시작했어요");
