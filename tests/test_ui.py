@@ -20,7 +20,7 @@ from puddle_trader import favorites
 from puddle_trader.config import AppConfig, save_credentials, save_local_overrides
 from puddle_trader.db.database import connect
 from puddle_trader.ui import service
-from puddle_trader.ui.runtime import UiApp, run_verdict
+from puddle_trader.ui.runtime import UiApp, previous_close, run_verdict
 from puddle_trader.ui.server import build_status, make_server
 
 REPO_CONFIG = Path(__file__).resolve().parents[1] / "config"
@@ -363,7 +363,7 @@ def test_side_panel_data_watchlist_and_todays_total(served, monkeypatch):
     by_code = {w["code"]: w for w in body["watchlist"]}
     assert by_code["005930"] == {"symbol_id": "KR:005930", "market": "KR", "code": "005930",
                                  "name": "삼성전자", "enabled": True, "last": None,
-                                 "holding": False}
+                                 "prev_close": None, "change_rate": None, "holding": False}
     assert by_code["069500"]["enabled"] is False
     assert body["today"] == {"closed": 0, "net": 0, "trades": []}
 
@@ -375,6 +375,38 @@ def test_side_panel_data_watchlist_and_todays_total(served, monkeypatch):
     body = api.get("/api/status")[1]
     assert (body["today"]["closed"], body["today"]["net"]) == (1, -2481)
     assert [t["signal_id"] for t in body["today"]["trades"]] == ["new"]
+
+
+class DailyCandles:
+    """일봉만 돌려주는 가짜 시세 조회기."""
+
+    def __init__(self, rows):
+        self.rows, self.calls = rows, []
+
+    def candles(self, code, interval, count):
+        self.calls.append((code, interval))
+        return {"candles": [{"timestamp": ts, "openPrice": "1", "highPrice": "1", "lowPrice": "1",
+                             "closePrice": str(close), "volume": "1"} for ts, close in self.rows]}
+
+
+def test_previous_close_is_the_last_daily_bar_before_today():
+    today = date(2026, 11, 13)
+    # 오늘(진행 중) 봉이 들어 있어도, 빠져 있어도 전일 종가는 같다
+    with_today = DailyCandles([("2026-11-13T00:00:00+09:00", 71_000),
+                               ("2026-11-12T00:00:00+09:00", 70_000),
+                               ("2026-11-11T00:00:00+09:00", 69_000)])
+    assert previous_close(with_today, "005930", today) == 70_000
+    assert with_today.calls == [("005930", "1d")]
+    without_today = DailyCandles([("2026-11-11T00:00:00+09:00", 69_000),
+                                  ("2026-11-12T00:00:00+09:00", 70_000)])
+    assert previous_close(without_today, "005930", today) == 70_000
+    # 시각이 UTC 로 와도 한국 날짜로 판단한다 (11/12 15:00Z = 한국 11/13 00:00)
+    utc = DailyCandles([("2026-11-12T15:00:00Z", 71_000), ("2026-11-11T15:00:00Z", 70_000)])
+    assert previous_close(utc, "005930", today) == 70_000
+    # 금요일 종가가 월요일의 전일 종가다 / 기록이 없으면 없다고 한다
+    monday = DailyCandles([("2026-11-13T00:00:00+09:00", 70_000)])
+    assert previous_close(monday, "005930", date(2026, 11, 16)) == 70_000
+    assert previous_close(DailyCandles([]), "005930", today) is None
 
 
 def test_today_events_read_like_a_timeline(workdir):
@@ -422,6 +454,13 @@ def test_demo_buys_in_practice_without_keys(workdir):
         assert set(watch) == {"예시종목 A", "예시종목 B", "예시종목 C"}
         assert watch["예시종목 A"]["holding"] is True and watch["예시종목 A"]["last"] == pos["last"]
         assert watch["예시종목 C"]["holding"] is False and watch["예시종목 C"]["last"] == 100_000
+        # 등락률: 전일 종가(100,000원)를 일봉에서 받아 온 뒤에 채워진다
+        rated = wait_for(lambda: (w := {x["name"]: x for x in app.watchlist()})
+                         and w["예시종목 C"]["change_rate"] is not None and w, timeout=10)
+        assert rated["예시종목 C"]["prev_close"] == 100_000
+        assert rated["예시종목 C"]["change_rate"] == pytest.approx(0.0)
+        a = rated["예시종목 A"]
+        assert a["change_rate"] == pytest.approx(a["last"] / 100_000 - 1) and a["change_rate"] < 0
         assert [s["status"] for s in status["journey"]][:4] == ["done", "done", "done", "current"]
         conn = app.db()
         detail = service.signal_detail(conn, AppConfig.load(), pos["signal_id"])

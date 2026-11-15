@@ -57,6 +57,8 @@ class FakeTossServer:
         self.now_fn = now_fn or (lambda: datetime.now(repo.KST))
         self.price_override: dict[str, float] = {}   # 테스트에서 현재가를 바꿀 때 사용
         self.no_trade_symbols: set[str] = set()      # 직전 1분에 체결이 없어 그 봉이 없는 종목
+        self.prev_close: dict[str, float] = {}       # 전일 종가 (없으면 BASE_PRICE)
+        self.daily_includes_today = True             # 일봉 응답에 오늘(진행 중) 봉이 들어가는지
         # 데모 시나리오용 훅: price_fn(symbol, now) → 현재가, signal_fn(symbol, now) → 신호 여부
         self.price_fn = None
         self.signal_fn = None
@@ -179,8 +181,10 @@ class FakeTossServer:
             result = [{"symbol": s, "timestamp": now.isoformat(), "currency": "KRW",
                        "lastPrice": str(self._last_price(s))} for s in q["symbols"].split(",")]
         elif url.path == "/api/v1/candles":
-            result = {"candles": self._candles(q["symbol"], int(q.get("count", 100))),
-                      "nextBefore": None}
+            count = int(q.get("count", 100))
+            candles = (self._daily_candles(q["symbol"], count) if q.get("interval") == "1d"
+                       else self._candles(q["symbol"], count))
+            result = {"candles": candles, "nextBefore": None}
         elif url.path == "/api/v1/orderbook":
             last = self._last_price(q["symbol"])
             result = {"timestamp": self.now_fn().isoformat(), "currency": "KRW",
@@ -218,6 +222,23 @@ class FakeTossServer:
         p = float(self.price_fn(symbol, ts + timedelta(seconds=59))) if self.price_fn else \
             float(PUDDLE_TAIL[-1][3])
         return (p, p, p, p, 100)
+
+    def _daily_candles(self, symbol: str, count: int) -> list[dict]:
+        """일봉: 오늘(진행 중, 종가 = 현재가) + 그 앞의 평일들. 직전 거래일 종가가 전일 종가다."""
+        day = self.now_fn().replace(hour=0, minute=0, second=0, microsecond=0)
+        prev = float(self.prev_close.get(symbol, BASE_PRICE))
+        out = []
+        if self.daily_includes_today:
+            p = self._last_price(symbol)
+            out.append((day, p))
+        d = day
+        while len(out) < count:
+            d -= timedelta(days=1)
+            if d.weekday() < 5:
+                out.append((d, prev))
+        return [{"timestamp": ts.isoformat(), "openPrice": str(c), "highPrice": str(c),
+                 "lowPrice": str(c), "closePrice": str(c), "volume": "1000", "currency": "KRW"}
+                for ts, c in out]
 
     def _candles(self, symbol: str, count: int) -> list[dict]:
         """현재 분 기준으로 완성봉 + 진행 중인 봉 1개.

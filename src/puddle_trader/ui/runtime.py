@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from .. import favorites
 from ..api.client import TossApiError, TossClient
 from ..api.endpoints import Account, MarketData, StockInfo
 from ..backtest import engine, runner
+from ..bars import from_api
 from ..collect.backfill import backfill_many
 from ..config import AppConfig, Credentials, credentials_present
 from ..db import init_db
@@ -25,6 +27,17 @@ from ..strategy.detector import DetectorParams
 from . import service
 
 DEMO_SYMBOLS = [("900001", "예시종목 A"), ("900002", "예시종목 B"), ("900003", "예시종목 C")]
+
+
+def previous_close(md: MarketData, code: str, today: date) -> float | None:
+    """전일 종가: 일봉 가운데 오늘보다 앞선 날짜의 마지막 봉 종가. 등락률의 기준이다.
+
+    /prices 응답에는 현재가만 있어서 일봉(1d)에서 구한다. 응답에 오늘 봉이 들어 있든 아니든
+    같은 결과가 나오도록, 날짜(한국 시간)로 걸러 낸다.
+    """
+    rows = (md.candles(code, "1d", 5) or {}).get("candles") or []
+    earlier = [b for b in from_api(rows) if b.ts.astimezone(repo.KST).date() < today]
+    return earlier[-1].close if earlier else None
 
 
 class DemoScenario:
@@ -119,6 +132,12 @@ class UiApp:
         self._state_lock = threading.Lock()
         self._demo_server = None
         self._demo_clock = None
+        self._md: MarketData | None = None
+        self._prev_close: dict[str, float] = {}     # 종목 id → 전일 종가
+        self._prev_day: date | None = None          # 위 값을 구한 날짜
+        self._prev_loading = False
+        self._prev_retry_at = 0.0
+        self.prev_close_pause = 0.2     # 일봉 조회 사이 쉬는 시간 (신호 조회를 막지 않게)
         self.now_fn = service.now_kst
 
     # ---- 저장되는 화면 상태 (연결 확인 결과, 마지막 판정) -------------------------
@@ -232,8 +251,11 @@ class UiApp:
             task.set("error", str(exc))
             return
         conn = self.db()
+        md = MarketData(client)
+        self._md = md
+        self._prev_day, self._prev_retry_at = None, 0.0   # 종목이 바뀌었을 수 있으니 다시 받는다
         scanner = Scanner(
-            MarketData(client), specs,
+            md, specs,
             DetectorParams.from_config(cfg.strategy),
             engine.ExitParams.from_config(cfg.strategy),
             engine.SessionParams.from_config(cfg.strategy),
@@ -267,6 +289,7 @@ class UiApp:
         finally:
             scanner.close()
             self._scanner = None
+            self._md = None
             conn.close()
             client.close()
             if self._demo_server is not None:
@@ -287,8 +310,44 @@ class UiApp:
                 out[pos.signal_id] = last
         return out
 
+    def _ensure_prev_closes(self) -> None:
+        """감시 중이면 전일 종가를 하루에 한 번, 뒤에서 받아 둔다 (실패한 종목은 1분 뒤 다시)."""
+        scanner, md = self._scanner, self._md
+        today = self.now_fn().date()
+        if (scanner is None or md is None or self._prev_loading or self._prev_day == today
+                or time.monotonic() < self._prev_retry_at):
+            return
+        self._prev_loading = True
+        specs = list(scanner.symbols)
+
+        def work() -> None:
+            closes: dict[str, float] = {}
+            failed = False
+            try:
+                for i, spec in enumerate(specs):
+                    if self._scanner is not scanner:      # 그사이 감시가 끝났다
+                        return
+                    if i:
+                        time.sleep(self.prev_close_pause)
+                    try:
+                        value = previous_close(md, spec.code, today)
+                    except (TossApiError, RuntimeError, ValueError, KeyError, TypeError):
+                        value, failed = None, True
+                    if value:
+                        closes[spec.id] = value
+                self._prev_close = closes
+                if failed:
+                    self._prev_retry_at = time.monotonic() + 60
+                else:
+                    self._prev_day = today
+            finally:
+                self._prev_loading = False
+
+        threading.Thread(target=work, daemon=True).start()
+
     def watchlist(self) -> list[dict[str, Any]]:
-        """옆 패널의 관심종목: 이름·코드·지켜보는지·최신 가격(감시 중일 때만 있다)·보유 여부."""
+        """옆 패널의 관심종목: 이름·코드·지켜보는지·최신 가격과 등락률(감시 중일 때만)·보유 여부."""
+        self._ensure_prev_closes()
         if self.demo:
             items = [{"market": "KR", "code": code, "name": name, "enabled": True}
                      for code, name in DEMO_SYMBOLS]
@@ -299,11 +358,14 @@ class UiApp:
         out = []
         for x in items:
             sid = repo.symbol_id(str(x.get("market", "KR")), str(x["code"]))
+            last = scanner.tape.last(sid) if scanner is not None else None
+            prev = self._prev_close.get(sid) if scanner is not None else None
             out.append({
                 "symbol_id": sid, "market": x.get("market", "KR"), "code": str(x["code"]),
                 "name": x.get("name") or str(x["code"]),
                 "enabled": x.get("enabled", True) is not False,
-                "last": scanner.tape.last(sid) if scanner is not None else None,
+                "last": last, "prev_close": prev,
+                "change_rate": (last / prev - 1) if last is not None and prev else None,
                 "holding": sid in held,
             })
         return out
