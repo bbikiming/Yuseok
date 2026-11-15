@@ -19,7 +19,7 @@ from puddle_trader import config as config_mod
 from puddle_trader import favorites
 from puddle_trader.config import AppConfig, save_credentials, save_local_overrides
 from puddle_trader.db.database import connect
-from puddle_trader.ui import access, service
+from puddle_trader.ui import access, qr, service
 from puddle_trader.ui.runtime import UiApp, previous_close, run_verdict
 from puddle_trader.ui.server import build_status, make_server
 
@@ -423,9 +423,76 @@ def test_computer_sees_the_phone_address_and_code(served_phone):
     assert all(u.startswith("http://") for u in body["phone"]["urls"])
 
 
+QR_SAMPLE = (   # "http://192.168.0.12:8765/?code=482913" — 표준 라이브러리 출력·디코더로 확인한 값
+    "11111110010010100001001111111",
+    "10000010010001011100101000001",
+    "10111010100000110011101011101",
+    "10111010111100011110101011101",
+    "10111010101101000001001011101",
+    "10000010101001111000001000001",
+    "11111110101010101010101111111",
+    "00000000111011010000000000000",
+    "10111110001110101111101111100",
+    "10000001101110000111001010001",
+    "11001011010110010100000110000",
+    "00010001011000100001011010010",
+    "01101010000110011111110101100",
+    "00000000010111100101001010101",
+    "00100011111001110100011000100",
+    "10101000111101010001010100010",
+    "11001110000000101100110000100",
+    "11101100011100000011011011101",
+    "10010011111010010110101001100",
+    "10110100111100111000011010010",
+    "10010110110000011100111110111",
+    "00000000101101100111100011111",
+    "11111110000101111101101011100",
+    "10000010111111011000100010000",
+    "10111010100110101100111111100",
+    "10111010111000000010110100011",
+    "10111010101000111001101011010",
+    "10000010010010111010110110010",
+    "11111110100001110100010001100",
+)
+
+
+def test_qr_code_matches_a_verified_sample():
+    assert qr.matrix("http://192.168.0.12:8765/?code=482913") == QR_SAMPLE
+    # 길이에 따라 크기(버전)가 커지고, 담을 수 없으면 알려 준다
+    assert [len(qr.matrix("x" * n)) for n in (14, 15, 42, 43, 213)] == [21, 25, 29, 33, 57]
+    with pytest.raises(ValueError):
+        qr.matrix("x" * 214)
+    for rows in (qr.matrix("a"), qr.matrix("x" * 213)):
+        assert all(len(r) == len(rows) and set(r) <= {"0", "1"} for r in rows)
+        assert rows[0][:8] == "11111110" and rows[6][:8] == "11111110"   # 왼쪽 위 찾기 무늬
+        assert rows[0][-7:] == "1111111" and rows[-1][:8] == "11111110"
+    # 터미널 그림: 두 줄을 한 글자에 담고, 흰 배경을 직접 지정한다
+    art = qr.to_terminal(QR_SAMPLE).split("\n")
+    assert len(art) == (29 + 4 + 1) // 2 and all(line.startswith("\033[30;107m") for line in art)
+    assert all(len(line) == len("\033[30;107m") + 33 + len("\033[0m") for line in art)
+
+
+def test_computer_gets_a_qr_that_opens_the_page_with_the_code(served_phone, monkeypatch):
+    _app, api, handler = served_phone
+    monkeypatch.setattr("puddle_trader.ui.server.lan_addresses", lambda: ["192.168.0.12"])
+    port = api.port
+    handler.force_remote = False
+    phone = api.get("/api/status")[1]["phone"]
+    assert phone["urls"] == [f"http://192.168.0.12:{port}"]
+    assert tuple(phone["qr"]) == qr.matrix(f"http://192.168.0.12:{port}/?code={handler.access.code}")
+    # 내부 주소를 못 찾으면 QR 은 없다 (주소·코드 안내만)
+    monkeypatch.setattr("puddle_trader.ui.server.lan_addresses", lambda: [])
+    assert api.get("/api/status")[1]["phone"]["qr"] is None
+    # 코드 입력 화면은 주소에 실려 온 코드를 받아 넣는다
+    handler.force_remote = True
+    page = api.get("/?code=000000")[1].decode()
+    assert "접속 코드를 넣어 주세요" in page and 'get("code")' in page
+
+
 def test_other_devices_are_refused_unless_phone_access_is_on(served):
     _app, api = served
-    assert api.get("/api/status")[1]["phone"] == {"enabled": False, "urls": [], "code": ""}
+    assert api.get("/api/status")[1]["phone"] == {"enabled": False, "urls": [], "code": "",
+                                                  "qr": None}
     api.handler.force_remote = True          # 127.0.0.1 로만 듣지만, 그래도 한 번 더 막는다
     assert api.get("/")[0] == 403 and api.get("/api/status")[0] == 403
     assert api.post("/api/login", {"code": ""})[0] == 403

@@ -215,8 +215,10 @@ def ui(
         False, "--phone", help="같은 와이파이의 휴대폰에서도 열 수 있게 한다 (접속 코드 필요)"),
 ) -> None:
     """브라우저로 여는 화면을 띄운다 (기본은 이 컴퓨터에서만 접속 가능, 실주문 없음)."""
+    import sys
     import webbrowser
 
+    from .ui import qr
     from .ui.access import lan_addresses
     from .ui.runtime import UiApp
     from .ui.server import serve
@@ -243,6 +245,9 @@ def ui(
             typer.echo("       (이 컴퓨터의 내부 주소를 찾지 못했어요. 네트워크 설정에서 IP 를 "
                        f"확인해 http://<IP>:{port} 로 여세요)")
         typer.echo(f"       접속 코드  {access.code[:3]} {access.code[3:]}")
+        if ips and sys.stdout.isatty():     # 휴대폰 카메라로 찍으면 주소와 코드가 한 번에 들어간다
+            typer.echo("       또는 아래 QR 코드를 휴대폰 카메라로 찍으세요:")
+            typer.echo(qr.to_terminal(qr.matrix(f"http://{ips[0]}:{port}/?code={access.code}")))
         typer.echo("[UI] 통신이 암호화되지 않습니다. 집처럼 믿을 수 있는 와이파이에서만 쓰고, "
                    "카페·공용 와이파이에서는 켜지 마세요.")
 

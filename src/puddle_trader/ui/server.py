@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .. import favorites
 from ..config import AppConfig, save_credentials, save_local_overrides
-from . import service
+from . import qr, service
 from .access import COOKIE, Access, host_allowed, is_loopback, is_private, lan_addresses
 from .runtime import UiApp, has_keys
 
@@ -142,9 +142,11 @@ class Handler(BaseHTTPRequestHandler):
         """이 컴퓨터의 화면에만 보여주는 휴대폰 접속 안내."""
         port = self.server.server_address[1]
         if not self.access.phone:
-            return {"enabled": False, "urls": [], "code": ""}
-        return {"enabled": True, "code": self.access.code,
-                "urls": [f"http://{ip}:{port}" for ip in lan_addresses()]}
+            return {"enabled": False, "urls": [], "code": "", "qr": None}
+        urls = [f"http://{ip}:{port}" for ip in lan_addresses()]
+        # 카메라로 찍으면 주소와 접속 코드가 한 번에 들어가는 QR (첫 번째 주소 기준)
+        rows = list(qr.matrix(f"{urls[0]}/?code={self.access.code}")) if urls else None
+        return {"enabled": True, "code": self.access.code, "urls": urls, "qr": rows}
 
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)

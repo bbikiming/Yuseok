@@ -198,6 +198,8 @@ ul.srows a.r:hover{background:var(--fill-weak);text-decoration:none}
 ul.srows .l{min-width:0;display:flex;flex-direction:column}ul.srows .l b{font-size:15px;color:var(--ink)}
 ul.srows .v{flex:none;display:flex;flex-direction:column;align-items:flex-end;font-size:15px}
 ul.srows .s{font-size:13px;color:var(--sub)}ul.srows .s.up{color:var(--up)}ul.srows .s.down{color:var(--down)}
+.qr{flex:none;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
+.qr svg{display:block;border-radius:12px;border:1px solid var(--line)}
 .livedot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--mute);margin-right:6px}
 .livedot.on{background:var(--up)}
 @media (max-width:760px){
@@ -432,6 +434,13 @@ function closeSheet(refocus = true) {
 async function pollSide() {        // 화면 본문을 다시 그리지 않는 페이지에서도 옆 패널은 최신으로 유지한다
   if (document.hidden) return;
   try { status = await api("/api/status"); drawNav(); drawTop(); drawSide(); } catch (e) { /* 다음 차례에 다시 시도 */ }
+}
+
+function qrSvg(rows) {             // QR 은 어두운 화면에서도 흰 바탕에 검은 칸으로 그려야 읽힌다
+  const n = rows.length, q = 4, size = n + 2 * q;
+  let d = "";
+  rows.forEach((row, y) => { for (let x = 0; x < n; x++) if (row[x] === "1") d += `M${x + q} ${y + q}h1v1h-1z`; });
+  return `<svg role="img" aria-label="휴대폰 카메라로 찍으면 이 화면이 열리는 QR 코드" viewBox="0 0 ${size} ${size}" width="168" height="168" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="#fff"></rect><path d="${d}" fill="#000"></path></svg>`;
 }
 
 /* ---------- 조각 ---------- */
@@ -704,8 +713,9 @@ async function viewSettings() {
   const keyed = s.has_keys && !status.demo, ph = status.phone;
   const phoneCard = status.remote ? "" : `<section class="card"><div class="between"><h2>휴대폰으로 열기</h2>
 ${ph && ph.enabled ? `<span class="chip pass">켜짐</span>` : `<span class="chip">꺼짐</span>`}</div>
-${ph && ph.enabled ? `<p class="sub" style="font-size:15px">휴대폰을 이 컴퓨터와 같은 와이파이에 연결하고, 휴대폰 브라우저 주소창에 아래 주소를 넣은 다음 접속 코드를 입력하세요.</p>
-<div class="stats"><div class="stat" style="flex:2 1 240px"><div>주소</div><div class="num" style="font-size:18px;overflow-wrap:anywhere">${ph.urls.length ? ph.urls.map(esc).join("<br>") : "내부 주소를 찾지 못했어요"}</div></div>
+${ph && ph.enabled ? `<p class="sub" style="font-size:15px">휴대폰을 이 컴퓨터와 같은 와이파이에 연결한 뒤, ${ph.qr ? "카메라로 QR 코드를 찍거나 " : ""}휴대폰 브라우저 주소창에 아래 주소를 넣고 접속 코드를 입력하세요.</p>
+<div class="stats">${ph.qr ? `<div class="qr">${qrSvg(ph.qr)}<span class="small sub">휴대폰 카메라로 찍으면<br>바로 열려요</span></div>` : ""}
+<div class="stat" style="flex:2 1 240px"><div>주소</div><div class="num" style="font-size:18px;overflow-wrap:anywhere">${ph.urls.length ? ph.urls.map(esc).join("<br>") : "내부 주소를 찾지 못했어요"}</div></div>
 <div class="stat"><div>접속 코드</div><div class="num">${esc(ph.code.slice(0, 3))} ${esc(ph.code.slice(3))}</div></div></div>
 <p class="note small">통신이 암호화되지 않아요. 집처럼 믿을 수 있는 와이파이에서만 쓰고, 카페·공용 와이파이에서는 켜지 마세요. 코드는 프로그램을 다시 켤 때마다 바뀝니다. 키(Client ID·Secret)는 휴대폰에서 넣을 수 없어요.</p>`
     : `<p class="sub" style="font-size:15px">지금은 이 컴퓨터에서만 열립니다. 휴대폰에서도 보려면 프로그램을 끄고(Ctrl-C) 터미널에서 아래처럼 다시 켜 주세요.</p>

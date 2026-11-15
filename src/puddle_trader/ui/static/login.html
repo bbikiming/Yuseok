@@ -60,6 +60,13 @@ form.addEventListener("submit", async (ev) => {
   } catch (e) { msg.textContent = "컴퓨터에 닿지 못했어요. 같은 와이파이인지 확인해 주세요"; }
   go.disabled = false;
 });
+// QR 코드로 열었으면 주소에 코드가 들어 있다. 바로 넣어 보고, 주소창에서는 지운다
+const fromQr = new URLSearchParams(location.search).get("code");
+if (fromQr) {
+  document.getElementById("code").value = fromQr;
+  history.replaceState(null, "", "/");
+  form.requestSubmit();
+}
 </script>
 </body>
 </html>
