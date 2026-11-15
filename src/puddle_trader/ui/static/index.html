@@ -44,7 +44,10 @@ header.top{position:sticky;top:0;z-index:3;background:var(--surface);border-bott
 gap:8px 16px}
 .brand{display:flex;align-items:center;min-height:44px;color:var(--ink)}.brand:hover{text-decoration:none}
 .brand b{font-size:20px;font-weight:800;letter-spacing:-.03em}
-.tools{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.tools{order:1;margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.quick{order:2;display:flex;align-items:center;gap:4px}
+#sheetbtn{position:relative;gap:6px}#sheetbtn .dot{position:absolute;top:6px;right:6px;width:8px;height:8px;
+border-radius:50%;background:var(--up)}
 .badge{display:inline-flex;align-items:center;padding:5px 9px;border-radius:8px;
 background:var(--blue-tint);color:var(--blue-text);font-size:13px;font-weight:700}
 .badge.demo{background:var(--inv-bg);color:var(--inv-fg)}
@@ -162,9 +165,27 @@ font:inherit;font-size:11px;font-weight:600;cursor:pointer;display:flex;flex-dir
 .rail button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .rail .dot{position:absolute;margin:-2px 0 0 22px;width:8px;height:8px;border-radius:50%;background:var(--up);
 border:2px solid var(--surface);box-sizing:content-box}
-.side-open .side{display:flex}
+.side-open .side{display:flex}#sheetbtn{display:none}
 .side{position:fixed;top:var(--hh,61px);right:64px;bottom:0;width:320px;z-index:2;background:var(--surface);
 border-left:1px solid var(--line);overflow-y:auto;padding:22px 20px 32px;flex-direction:column;gap:14px}
+}
+#sidebody{display:flex;flex-direction:column;gap:14px}.sheethead,.backdrop{display:none}
+/* 좁은 화면: 같은 내용을 아래에서 올라오는 시트로 보여 준다 */
+@media (max-width:1099px){
+.sheet-open{overflow:hidden}
+.sheet-open .backdrop{display:block;position:fixed;inset:0;z-index:5;background:rgba(0,0,0,.5)}
+.sheet-open .side{display:flex;flex-direction:column;gap:14px;position:fixed;left:0;right:0;bottom:0;z-index:6;
+max-width:640px;margin:0 auto;max-height:84vh;overflow-y:auto;background:var(--surface);border-radius:20px 20px 0 0;
+padding:10px 20px calc(28px + env(safe-area-inset-bottom));box-shadow:0 -8px 32px rgba(0,0,0,.2)}
+.sheethead{display:flex;flex-direction:column;gap:12px;position:sticky;top:-10px;margin:-10px -20px 0;
+padding:10px 20px 10px;background:var(--surface);z-index:1}
+.sheethead .grab{align-self:center;width:40px;height:4px;border-radius:999px;background:var(--line-strong)}
+.sheethead .tabs{display:flex;gap:4px;padding:4px;border-radius:12px;background:var(--fill)}
+.sheethead .tabs button{flex:1;min-height:40px;border:0;border-radius:9px;background:none;color:var(--sub);
+font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.sheethead .tabs button[aria-selected=true]{background:var(--surface);color:var(--ink);
+box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.sheethead .tabs button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 }
 .side h2{font-size:18px}.side h3{margin:8px 0 0;font-size:13px;font-weight:600;color:var(--sub)}
 .side .total{display:flex;flex-direction:column;gap:2px;padding:14px 16px;border-radius:14px;background:var(--fill-weak)}
@@ -188,7 +209,7 @@ font-size:11px;font-weight:600;color:var(--mute)}
 nav.gnb a:hover{background:none}
 nav.gnb a[aria-current=page]{color:var(--ink)}
 nav.gnb svg{display:block}nav.gnb .count{display:none}.long{display:none}
-.tools{flex:1 1 100%;margin-left:0}#themebtn{margin-left:auto}
+.quick{order:0;margin-left:auto}.tools{order:3;flex:1 1 100%;margin-left:0;justify-content:space-between}
 ol.steps li{flex:1 1 100%;flex-direction:row;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:12px 14px}
 ol.steps li:not(.current) .small{display:none}ol.steps li.current .small{flex:1 1 100%}
 }
@@ -199,14 +220,16 @@ ol.steps li:not(.current) .small{display:none}ol.steps li.current .small{flex:1 
 <header class="top"><div class="bar">
 <a class="brand" href="#/"><b>웅덩이 트레이더</b></a>
 <nav class="gnb" aria-label="메뉴" id="nav"></nav>
-<div class="tools"><span id="mode" class="badge">연습 모드 · 실제 주문 없음</span>
-<button type="button" class="iconbtn" id="themebtn" data-act="theme"></button><span id="topbtn"></span></div>
+<div class="quick"><button type="button" class="btn small" id="sheetbtn" data-act="sheet-open" aria-haspopup="dialog" aria-controls="side"></button>
+<button type="button" class="iconbtn" id="themebtn" data-act="theme"></button></div>
+<div class="tools"><span id="mode" class="badge">연습 모드 · 실제 주문 없음</span><span id="topbtn"></span></div>
 </div></header>
 <div class="shell">
 <div class="wrap">
 <main id="view" aria-live="polite"><p class="sub">불러오는 중…</p></main>
 </div>
-<aside class="side" id="side" aria-label="옆 패널"></aside>
+<div class="backdrop" data-act="sheet-close"></div>
+<aside class="side" id="side" aria-label="내 현황"><div id="sidehead"></div><div id="sidebody"></div></aside>
 <div class="rail" id="rail" role="toolbar" aria-label="옆 패널 메뉴"></div>
 </div>
 <div id="toast" role="status"></div>
@@ -358,23 +381,55 @@ ${running ? "" : `<p class="note small">연습을 시작하면 지켜보는 종�
       return e.signal_id ? `<li><a class="r" href="#/signal/${encodeURIComponent(e.signal_id)}">${inner}</a></li>` : `<li><span class="r">${inner}</span></li>`;
     }).join("") + "</ul>" : `<p class="small sub">오늘은 아직 아무 일도 없었어요.</p>`);
 }
+const isWide = () => window.innerWidth >= 1100;
+let sheetOpen = false, sideHead = "";
 function drawSide() {
   if (!status) return;
+  const wide = isWide();
+  if (wide && sheetOpen) closeSheet(false);
   document.body.classList.toggle("side-open", !!sideTab);
   $("#rail").innerHTML = SIDE.map(([key, label, icon]) =>
     `<button type="button" data-act="side" data-tab="${key}" aria-pressed="${sideTab === key}" aria-controls="side">` +
     `<svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24">${icon}</svg>` +
     (key === "invest" && status.counts.open ? `<span class="dot" aria-hidden="true"></span>` : "") + `${label}</button>`).join("");
-  const html = sideTab ? sideBody() : "";
-  if (html !== sideHtml) { $("#side").innerHTML = html; sideHtml = html; }   // 내용이 바뀔 때만 다시 그린다 (스크롤 유지)
+  $("#sheetbtn").innerHTML = `<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24">${SIDE[0][2]}</svg>내 현황` +
+    (status.counts.open ? `<span class="dot" aria-hidden="true"></span>` : "");
+  const shown = wide ? !!sideTab : sheetOpen;
+  // 시트 머리(탭)와 본문을 따로 그린다. 본문만 자주 바뀌므로 탭에 둔 초점이 유지된다
+  const head = shown ? `<div class="sheethead"><span class="grab" aria-hidden="true"></span>
+<div class="between" style="align-items:center"><b style="font-size:18px;color:var(--ink)">내 현황</b>
+<button type="button" class="btn small" data-act="sheet-close">닫기</button></div>
+<div class="tabs" role="tablist" aria-label="내 현황 종류">` + SIDE.map(([key, label]) =>
+    `<button type="button" role="tab" aria-selected="${sideTab === key}" data-act="side" data-tab="${key}">${label}</button>`).join("") + `</div></div>` : "";
+  if (head !== sideHead) { $("#sidehead").innerHTML = head; sideHead = head; }
+  const html = shown ? sideBody() : "";
+  if (html !== sideHtml) { $("#sidebody").innerHTML = html; sideHtml = html; }   // 내용이 바뀔 때만 다시 그린다 (스크롤 유지)
 }
 function toggleSide(tab) {
-  sideTab = sideTab === tab ? "" : tab;
+  sideTab = !isWide() || sideTab !== tab ? tab : "";     // 시트에서는 탭만 바꾸고, 넓은 화면에서는 같은 아이콘을 다시 누르면 닫는다
   store.set("pt-side", sideTab);
   drawSide();
+  if (!isWide()) { const cur = $('#sidehead [aria-selected="true"]'); if (cur) cur.focus(); }
+}
+function openSheet() {
+  if (isWide()) return;
+  if (!sideTab) sideTab = "invest";
+  sheetOpen = true;
+  document.body.classList.add("sheet-open");
+  const side = $("#side"); side.setAttribute("role", "dialog"); side.setAttribute("aria-modal", "true");
+  drawSide();
+  const cur = $('#sidehead [aria-selected="true"]'); if (cur) cur.focus();
+}
+function closeSheet(refocus = true) {
+  if (!sheetOpen) return;
+  sheetOpen = false;
+  document.body.classList.remove("sheet-open");
+  const side = $("#side"); side.removeAttribute("role"); side.removeAttribute("aria-modal");
+  drawSide();
+  if (refocus) $("#sheetbtn").focus();
 }
 async function pollSide() {        // 화면 본문을 다시 그리지 않는 페이지에서도 옆 패널은 최신으로 유지한다
-  if (document.hidden || !sideTab || window.innerWidth < 1100) return;
+  if (document.hidden) return;
   try { status = await api("/api/status"); drawNav(); drawTop(); drawSide(); } catch (e) { /* 다음 차례에 다시 시도 */ }
 }
 
@@ -699,6 +754,8 @@ document.addEventListener("click", (ev) => {
   const a = b.dataset.act, m = b.dataset.m, c = b.dataset.c;
   if (a === "theme") toggleTheme();
   else if (a === "side") toggleSide(b.dataset.tab);
+  else if (a === "sheet-open") openSheet();
+  else if (a === "sheet-close") closeSheet();
   else if (a === "watch-start") act(() => api("/api/watch/start", {}), "연습을 시작했어요");
   else if (a === "watch-stop") act(() => api("/api/watch/stop", {}), "지켜보기를 멈췄어요");
   else if (a === "fav-toggle") act(() => api("/api/favorites/toggle", {market: m, code: c, enabled: b.dataset.on === "1"}));
@@ -721,7 +778,18 @@ document.addEventListener("submit", (ev) => {
 // 위쪽 메뉴 줄이 두 줄로 접히면 옆 패널이 그 아래에서 시작하도록 높이를 알려 준다
 new ResizeObserver(([e]) => document.documentElement.style.setProperty("--hh", Math.round(e.target.getBoundingClientRect().height) + "px"))
   .observe($("header.top"));
-window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", () => { closeSheet(false); render(); });
+window.addEventListener("resize", () => drawSide());
+document.addEventListener("keydown", (ev) => {
+  if (!sheetOpen) return;
+  if (ev.key === "Escape") { closeSheet(); return; }
+  if (ev.key !== "Tab") return;                       // 시트가 열려 있는 동안 초점이 시트 밖으로 나가지 않게 한다
+  const items = [...$("#side").querySelectorAll("button, a[href]")];
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+  else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+});
 setInterval(pollSide, 2500);
 render();
 </script>
