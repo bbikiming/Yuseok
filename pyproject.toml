@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "puddle-trader"
+version = "0.1.0"
+description = "CLI 기반 AI 학습형 웅덩이 단타 보조 시스템 (토스증권 Open API)"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27",
+    "typer>=0.12",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+ml = ["scikit-learn>=1.4", "pandas>=2.2", "numpy>=1.26"]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+tradebot = "puddle_trader.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+puddle_trader = ["db/*.sql", "db/migrations/*.sql", "ui/static/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# ruff 버전에 따라 기본 규칙이 달라지므로 명시적으로 고정한다.
+select = ["E", "F", "I", "UP", "B", "C4", "BLE", "RUF"]
+# 한글 문서/주석의 기호(×, ·, – 등)를 오탐하는 규칙은 끈다.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"split_openapi.py" = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+# typer 는 인자 기본값에 Option()/Argument() 를 쓰는 것이 정상 사용법이다.
+extend-immutable-calls = ["typer.Option", "typer.Argument"]

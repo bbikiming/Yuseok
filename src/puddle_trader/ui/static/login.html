@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F2F4F6">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="웅덩이">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<title>웅덩이 트레이더 · 접속 코드</title>
+<style>
+:root{--bg:#F2F4F6;--surface:#FFFFFF;--fill:#F2F4F6;--ink:#191F28;--ink2:#333D4B;--sub:#6B7684;
+--blue:#3182F6;--blue-press:#1B64DA;--blue-text:#1B64DA;--blue-tint:#E8F3FF;--line:#E5E8EB}
+@media (prefers-color-scheme:dark){:root{--bg:#17171C;--surface:#202027;--fill:#2C2C35;--ink:#FFFFFF;
+--ink2:#E4E4E5;--sub:#9E9EA4;--blue:#3485FA;--blue-press:#4593FC;--blue-text:#64A8FF;
+--blue-tint:rgba(52,133,250,.16);--line:#2C2C35}}
+*{box-sizing:border-box}html{color-scheme:light dark}
+body{margin:0;min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:20px;
+background:var(--bg);color:var(--ink2);font-size:16px;line-height:1.5;letter-spacing:-.01em;word-break:keep-all;
+font-family:"Toss Product Sans","Pretendard Variable",Pretendard,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif}
+main{width:100%;max-width:400px;background:var(--surface);border-radius:20px;padding:28px 24px;
+display:flex;flex-direction:column;gap:16px}
+h1{margin:0;font-size:24px;line-height:1.35;color:var(--ink)}p{margin:0}.sub{color:var(--sub);font-size:15px}
+.badge{align-self:flex-start;padding:5px 9px;border-radius:8px;background:var(--blue-tint);color:var(--blue-text);
+font-size:13px;font-weight:700}
+label{display:flex;flex-direction:column;gap:8px;font-weight:600;font-size:15px}
+input{min-height:56px;padding:0 16px;border-radius:12px;border:1px solid transparent;background:var(--fill);
+color:var(--ink);font:inherit;font-size:24px;font-weight:700;letter-spacing:.2em;text-align:center;width:100%}
+input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 1px var(--blue);background:var(--surface)}
+button{min-height:52px;border:0;border-radius:12px;background:var(--blue);color:#fff;font:inherit;font-weight:600;
+cursor:pointer}button:hover{background:var(--blue-press)}button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+#msg{min-height:24px;font-size:15px;font-weight:600;color:var(--ink)}
+ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px;color:var(--sub);font-size:14px}
+</style>
+</head>
+<body>
+<main>
+<span class="badge">연습 모드 · 실제 주문 없음</span>
+<div><h1>접속 코드를 넣어 주세요</h1>
+<p class="sub">이 화면을 켠 컴퓨터에 보이는 숫자 6자리예요.</p></div>
+<form id="f">
+<label>접속 코드
+<input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="7" required autofocus aria-describedby="msg"></label>
+<p id="msg" role="alert"></p>
+<button id="go">들어가기</button>
+</form>
+<ol><li>컴퓨터의 터미널(검은 창)에 "접속 코드"가 적혀 있어요.</li>
+<li>컴퓨터 화면의 설정 → "휴대폰으로 열기"에서도 볼 수 있어요.</li></ol>
+</main>
+<script>
+"use strict";
+const form = document.getElementById("f"), msg = document.getElementById("msg"), go = document.getElementById("go");
+form.style.cssText = "display:flex;flex-direction:column;gap:12px";
+form.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  go.disabled = true; msg.textContent = "확인하는 중…";
+  try {
+    const res = await fetch("/api/login", {method: "POST", body: JSON.stringify({code: document.getElementById("code").value}),
+      headers: {"Content-Type": "application/json", "X-Tradebot": "1"}});
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) { location.reload(); return; }   // 주소는 그대로 두고 다시 읽는다. 알림에서 온 주소(#/signal/…)가 이어진다
+    msg.textContent = data.error || "들어가지 못했어요";
+  } catch (e) { msg.textContent = "컴퓨터에 닿지 못했어요. 같은 와이파이인지 확인해 주세요"; }
+  go.disabled = false;
+});
+// QR 코드로 열었으면 주소에 코드가 들어 있다. 바로 넣어 보고, 주소창에서는 지운다
+const fromQr = new URLSearchParams(location.search).get("code");
+if (fromQr) {
+  document.getElementById("code").value = fromQr;
+  history.replaceState(null, "", "/" + location.hash);
+  form.requestSubmit();
+}
+</script>
+</body>
+</html>
